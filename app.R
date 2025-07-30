@@ -251,13 +251,20 @@ ui <- page_sidebar(
       ),
       selectInput("map_container", label = NULL, choices = NULL, width = "100%"),
       
-      div(style = "display: flex; align-items: center; margin-bottom: 5px;",
-          "Stage (Optional):",
-          tags$span(title = "Life stages - accepts B/Beginning, M/Middle, E/End. Leave empty if single-stage study.",
-                   style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
-                   HTML("&#9432;"))
+      # Single-stage study option
+      checkboxInput("single_stage", "Single-stage study (no life stages)", value = FALSE),
+      
+      # Stage mapping (conditionally shown)
+      conditionalPanel(
+        condition = "!input.single_stage",
+        div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+            "Stage:",
+            tags$span(title = "Life stages - accepts B/Beginning, M/Middle, E/End",
+                     style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
+                     HTML("&#9432;"))
+        ),
+        selectInput("map_stage", label = NULL, choices = NULL, width = "100%")
       ),
-      selectInput("map_stage", label = NULL, choices = NULL, width = "100%"),
       
       div(style = "display: flex; align-items: center; margin-bottom: 5px;",
           "Product:",
@@ -377,13 +384,18 @@ server <- function(input, output, session) {
   observeEvent(input$analyze, {
     # First, handle column mapping if raw data exists but mapped data doesn't
     if (!is.null(values$raw_data) && is.null(values$data)) {
-      # Check if all required mappings are selected (Stage is optional)
+      # Check if all required mappings are selected
       required_mappings <- list(
         Batch = input$map_batch,
         Container = input$map_container,
         Product = input$map_product,
         Measurement = input$map_measurement
       )
+      
+      # For multi-stage studies, Stage is also required
+      if (!input$single_stage) {
+        required_mappings$Stage <- input$map_stage
+      }
       
       # Validate that all required columns are mapped
       empty_required <- sapply(required_mappings, function(x) is.null(x) || x == "")
@@ -394,18 +406,15 @@ server <- function(input, output, session) {
         return()
       }
       
-      # Include Stage in full mapping list for duplicate checking
-      all_mappings <- list(
-        Batch = input$map_batch,
-        Container = input$map_container,
-        Stage = input$map_stage,
-        Product = input$map_product,
-        Measurement = input$map_measurement
-      )
+      # Create list of all selected mappings for duplicate checking
+      if (input$single_stage) {
+        all_mappings <- required_mappings  # Only required mappings
+      } else {
+        all_mappings <- required_mappings  # Includes Stage for multi-stage
+      }
       
-      # Check for duplicate mappings (exclude empty Stage from duplicate check)
+      # Check for duplicate mappings
       selected_cols <- unlist(all_mappings)
-      selected_cols <- selected_cols[selected_cols != "" & !is.null(selected_cols)]  # Remove empty mappings
       if (length(selected_cols) != length(unique(selected_cols))) {
         showNotification("Error: Each column can only be mapped once. Please select different columns for each parameter.", 
                         type = "error", duration = 10)
@@ -424,9 +433,12 @@ server <- function(input, output, session) {
           TRUE ~ standardized_product
         )
         
-        # Handle Stage column (optional)
-        if (!is.null(input$map_stage) && input$map_stage != "") {
-          # Stage column is mapped
+        # Handle Stage column based on single-stage checkbox
+        if (input$single_stage) {
+          # Single-stage study - assign default single stage
+          standardized_stage <- rep("S", nrow(values$raw_data))  # "S" for Single stage
+        } else {
+          # Multi-stage study - use mapped Stage column
           raw_stage <- values$raw_data[[input$map_stage]]
           standardized_stage <- toupper(as.character(raw_stage))
           standardized_stage <- case_when(
@@ -435,9 +447,6 @@ server <- function(input, output, session) {
             standardized_stage %in% c("E", "END", "ENDING") ~ "E",
             TRUE ~ standardized_stage
           )
-        } else {
-          # No Stage column - assign default single stage
-          standardized_stage <- rep("S", nrow(values$raw_data))  # "S" for Single stage
         }
         
         values$data <- data.frame(
