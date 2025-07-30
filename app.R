@@ -603,42 +603,339 @@ server <- function(input, output, session) {
   output$html_report <- renderUI({
     req(values$results, values$components, values$data)
     
-    # Create temporary file for rendered HTML
-    temp_rmd <- tempfile(fileext = ".Rmd")
-    temp_html <- tempfile(fileext = ".html")
-    
-    # Copy template to temp location
-    template_path <- file.path("PBE_SHINY", "report_template.Rmd")
-    if (!file.exists(template_path)) {
-      template_path <- "report_template.Rmd"  # fallback
-    }
-    file.copy(template_path, temp_rmd)
-    
     tryCatch({
-      # Render the R Markdown with parameters
-      rmarkdown::render(
-        temp_rmd,
-        output_file = temp_html,
-        params = list(
-          results = values$results,
-          components = values$components,
-          data_summary = values$data
+      # Generate HTML directly in R
+      results <- values$results
+      components <- values$components
+      data_summary <- values$data
+      
+      # Create HTML content
+      div(
+        # Header
+        div(
+          style = "text-align: center; margin-bottom: 30px;",
+          h2("Population Bioequivalence (PBE) Analysis Report"),
+          h4("FDA Draft Guidance Format"),
+          p(paste("Generated:", Sys.Date()))
         ),
-        quiet = TRUE
+        
+        # Study Summary
+        h3("Study Summary"),
+        p(strong("PSG Method:"), ifelse(results$psg_method == "fluticasone", "Fluticasone Propionate PSG", "Budesonide PSG")),
+        p(strong("Selected Procedure:"), ifelse(results$use_reference_scaled, "Reference-scaled", "Constant-scaled")),
+        p(strong("Procedure Selection:"), paste("σ_R (", sprintf("%.6f", results$sigma_r), ")", ifelse(results$use_reference_scaled, " > ", " ≤ "), "σ_T0 (0.1)")),
+        
+        hr(),
+        
+        # Reference-Scaled Analysis Results
+        h3("Reference-Scaled Analysis Results"),
+        if(results$psg_method == "fluticasone") {
+          # Fluticasone PSG - exclude ED/UD terms
+          ref_data <- data.frame(
+            col1 = c(
+              sprintf("E1 = %.9f", components$e1), 
+              sprintf("E2 = %.8f", components$e2),
+              sprintf("E3s = %.9f", components$e3s),
+              sprintf("E4s = %.9f", components$e4s),
+              sprintf("Eq = %.8f", results$eq_ref)
+            ),
+            col2 = c(
+              sprintf("H1 = %.9f", components$h1),
+              sprintf("H2 = %.8f", components$h2), 
+              sprintf("H3s = %.9f", components$h3s),
+              sprintf("H4s = %.9f", components$h4s),
+              ""
+            ),
+            col3 = c(
+              sprintf("U1 = %.8f", components$u1),
+              sprintf("U2 = %.9f", components$u2),
+              sprintf("U3 = %.8f", components$u3),
+              sprintf("U4 = %.8f", components$u4),
+              sprintf("Uq = %.9f", results$uq_ref)
+            ),
+            col4 = c(
+              "", "", "", "",
+              sprintf("Hη = %.9f", results$hq_ref)
+            )
+          )
+          
+          ref_data %>%
+            kable(format = "html", escape = FALSE, 
+                  col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                  caption = "Reference-Scaled Analysis") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 14) %>%
+            row_spec(5, bold = TRUE, background = "#f0f8ff") %>%
+            HTML()
+            
+        } else {
+          # Budesonide PSG - include ED/UD terms
+          ref_data <- data.frame(
+            col1 = c(
+              sprintf("ED = %.9f", components$ed),
+              sprintf("E1 = %.9f", components$e1), 
+              sprintf("E2 = %.8f", components$e2),
+              sprintf("E3s = %.9f", components$e3s),
+              sprintf("E4s = %.9f", components$e4s),
+              sprintf("Eq = %.8f", results$eq_ref)
+            ),
+            col2 = c(
+              sprintf("HD = %.9f", components$hd),
+              sprintf("H1 = %.9f", components$h1),
+              sprintf("H2 = %.8f", components$h2), 
+              sprintf("H3s = %.9f", components$h3s),
+              sprintf("H4s = %.9f", components$h4s),
+              ""
+            ),
+            col3 = c(
+              sprintf("UD = %.9f", components$ud),
+              sprintf("U1 = %.8f", components$u1),
+              sprintf("U2 = %.9f", components$u2),
+              sprintf("U3 = %.8f", components$u3),
+              sprintf("U4 = %.8f", components$u4),
+              sprintf("Uq = %.9f", results$uq_ref)
+            ),
+            col4 = c(
+              "", "", "", "", "",
+              sprintf("Hη = %.9f", results$hq_ref)
+            )
+          )
+          
+          ref_data %>%
+            kable(format = "html", escape = FALSE, 
+                  col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                  caption = "Reference-Scaled Analysis") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 14) %>%
+            row_spec(6, bold = TRUE, background = "#f0f8ff") %>%
+            HTML()
+        },
+        
+        hr(),
+        
+        # Constant-Scaled Analysis Results
+        h3("Constant-Scaled Analysis Results"),
+        if(results$psg_method == "fluticasone") {
+          # Fluticasone PSG - exclude ED/UD terms
+          const_data <- data.frame(
+            col1 = c(
+              sprintf("E1 = %.9f", components$e1),
+              sprintf("E2 = %.8f", components$e2),
+              sprintf("E3c = %.9f", components$e3c),
+              sprintf("E4c = %.8f", components$e4c),
+              sprintf("Eq = %.9f", results$eq_const)
+            ),
+            col2 = c(
+              sprintf("H1 = %.9f", components$h1),
+              sprintf("H2 = %.8f", components$h2),
+              sprintf("H3c = %.9f", components$h3c),
+              sprintf("H4c = %.8f", components$h4c),
+              ""
+            ),
+            col3 = c(
+              sprintf("U1 = %.8f", components$u1),
+              sprintf("U2 = %.9f", components$u2),
+              sprintf("U3c = %.9f", components$u3c),
+              sprintf("U4c = %.9f", components$u4c),
+              sprintf("Uq = %.9f", results$uq_const)
+            ),
+            col4 = c(
+              "", "", "", "",
+              sprintf("Hη = %.9f", results$hq_const)
+            )
+          )
+          
+          const_data %>%
+            kable(format = "html", escape = FALSE,
+                  col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                  caption = "Constant-Scaled Analysis") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 14) %>%
+            row_spec(5, bold = TRUE, background = "#fff8f0") %>%
+            HTML()
+            
+        } else {
+          # Budesonide PSG - include ED/UD terms
+          const_data <- data.frame(
+            col1 = c(
+              sprintf("ED = %.9f", components$ed),
+              sprintf("E1 = %.9f", components$e1),
+              sprintf("E2 = %.8f", components$e2),
+              sprintf("E3c = %.9f", components$e3c),
+              sprintf("E4c = %.8f", components$e4c),
+              sprintf("Eq = %.9f", results$eq_const)
+            ),
+            col2 = c(
+              sprintf("HD = %.9f", components$hd),
+              sprintf("H1 = %.9f", components$h1),
+              sprintf("H2 = %.8f", components$h2),
+              sprintf("H3c = %.9f", components$h3c),
+              sprintf("H4c = %.8f", components$h4c),
+              ""
+            ),
+            col3 = c(
+              sprintf("UD = %.9f", components$ud),
+              sprintf("U1 = %.8f", components$u1),
+              sprintf("U2 = %.9f", components$u2),
+              sprintf("U3c = %.9f", components$u3c),
+              sprintf("U4c = %.9f", components$u4c),
+              sprintf("Uq = %.9f", results$uq_const)
+            ),
+            col4 = c(
+              "", "", "", "", "",
+              sprintf("Hη = %.9f", results$hq_const)  
+            )
+          )
+          
+          const_data %>%
+            kable(format = "html", escape = FALSE,
+                  col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                  caption = "Constant-Scaled Analysis") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 14) %>%
+            row_spec(6, bold = TRUE, background = "#fff8f0") %>%
+            HTML()
+        },
+        
+        hr(),
+        
+        # Table 2: Summary of PBE Results
+        h3("Table 2: Summary of PBE Results"),
+        {
+          summary_table <- data.frame(
+            Variable = c(
+              "In Vitro Measurement",
+              "Reference-scaled Procedure", 
+              "Constant-scaled Procedure"
+            ),
+            `Geometric Mean Test` = c(
+              sprintf("%.6f", exp(results$test_mean)),
+              sprintf("%.9f", results$eq_ref),
+              sprintf("%.9f", results$eq_const)
+            ),
+            `Geometric Mean Reference` = c(
+              sprintf("%.6f", exp(results$ref_mean)),
+              sprintf("%.9f", results$hq_ref),
+              sprintf("%.9f", results$hq_const)
+            ),
+            `Geometric Mean Ratio` = c(
+              sprintf("%.6f", exp(results$test_mean) / exp(results$ref_mean)),
+              ifelse(results$bioequivalent_ref, "PASS", "FAIL"),
+              ifelse(results$bioequivalent_const, "PASS", "FAIL")
+            ),
+            `Standard Deviation SigmaT` = c(
+              sprintf("%.6f", results$sigma_t),
+              "", ""
+            ),
+            `Standard Deviation SigmaR` = c(
+              sprintf("%.6f", results$sigma_r),
+              "", ""
+            ),
+            `SigmaT/SigmaR Ratio` = c(
+              sprintf("%.6f", results$sigma_t / results$sigma_r),
+              "", ""
+            ),
+            check.names = FALSE
+          )
+          
+          summary_table %>%
+            kable(format = "html", escape = FALSE,
+                  caption = "Table 2. Summary Tables of PBE Results") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 14) %>%
+            row_spec(1, background = "#f8f9fa") %>%
+            row_spec(2, background = "#e8f5e8") %>%
+            row_spec(3, background = "#fff3cd") %>%
+            HTML()
+        },
+        
+        hr(),
+        
+        # Final Bioequivalence Results
+        h3("Final Bioequivalence Results"),
+        {
+          final_data <- data.frame(
+            Procedure = c("Reference-Scaled", "Constant-Scaled"),
+            `Point Estimate (Eq)` = c(
+              sprintf("%.9f", results$eq_ref),
+              sprintf("%.9f", results$eq_const)
+            ),
+            `Variance Term (Uq)` = c(
+              sprintf("%.9f", results$uq_ref),
+              sprintf("%.9f", results$uq_const)
+            ),
+            `Upper Confidence Bound (Hη)` = c(
+              sprintf("%.9f", results$hq_ref),
+              sprintf("%.9f", results$hq_const)
+            ),
+            Decision = c(
+              ifelse(results$bioequivalent_ref, "BIOEQUIVALENT", "NOT BIOEQUIVALENT"),
+              ifelse(results$bioequivalent_const, "BIOEQUIVALENT", "NOT BIOEQUIVALENT")
+            ),
+            check.names = FALSE
+          )
+          
+          final_data %>%
+            kable(format = "html", escape = FALSE,
+                  caption = "Final Bioequivalence Results") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 14) %>%
+            column_spec(5, bold = TRUE) %>%
+            row_spec(which(results$use_reference_scaled), background = "#d4edda") %>%
+            HTML()
+        },
+        
+        hr(),
+        
+        # Appendix
+        h3("Appendix"),
+        h4("Table 1: Complete Individual Data of In Vitro Tests"),
+        {
+          full_data <- data_summary[, c("Batch", "Container", "Stage", "Product", "Measurement")]
+          names(full_data) <- c("Batches", "Container", "Stage", "Product", "In vitro measurement (original data)")
+          full_data$`In vitro measurement (original data)` <- sprintf("%.6f", full_data$`In vitro measurement (original data)`)
+          
+          full_data %>%
+            kable(format = "html",
+                  caption = "Table 1. Complete Individual Data of In Vitro Tests") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 12) %>%
+            scroll_box(width = "100%", height = "400px") %>%
+            HTML()
+        },
+        
+        # Data Visualizations
+        h4("Data Visualizations"),
+        h5("Data Distribution by Product"),
+        renderPlot({
+          ggplot(data_summary, aes(x = Measurement, fill = Product)) +
+            geom_histogram(alpha = 0.7, bins = 20, position = "identity") +
+            scale_fill_manual(values = c("TEST" = "skyblue", "REF" = "lightcoral")) +
+            labs(title = "Distribution of Measurements by Product",
+                 x = "Measurement Value", y = "Count") +
+            theme_minimal() +
+            theme(legend.position = "top",
+                  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+        }),
+        
+        h5("Batch-to-Batch Variability"),  
+        renderPlot({
+          ggplot(data_summary, aes(x = factor(Batch), y = Measurement, fill = Product)) +
+            geom_boxplot() +
+            scale_fill_manual(values = c("TEST" = "skyblue", "REF" = "lightcoral")) +
+            labs(title = "Batch-to-Batch Variability",
+                 x = "Batch", y = "Measurement") +
+            theme_minimal() +
+            theme(legend.position = "top",
+                  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+        }),
+        
+        hr(),
+        p(strong("Report Generated:"), Sys.time())
       )
       
-      # Read the rendered HTML
-      html_content <- readLines(temp_html, warn = FALSE)
-      html_string <- paste(html_content, collapse = "\n")
-      
-      # Clean up temp files
-      unlink(c(temp_rmd, temp_html))
-      
-      # Return HTML content
-      HTML(html_string)
-      
     }, error = function(e) {
-      # Fallback in case of rendering error
+      # Fallback in case of error
       div(
         h3("Report Generation Error"),
         p("There was an error generating the report. Please ensure all calculations have completed."),
@@ -648,57 +945,333 @@ server <- function(input, output, session) {
   })
   
   
-  # Download Report as PDF
+  # Download Report as HTML
   output$download_report <- downloadHandler(
     filename = function() {
-      paste("PBE_Analysis_Report_", Sys.Date(), ".pdf", sep = "")
+      paste("PBE_Analysis_Report_", Sys.Date(), ".html", sep = "")
     },
     content = function(file) {
       req(values$results, values$components, values$data)
       
-      # Create temporary file for R Markdown
-      temp_rmd <- tempfile(fileext = ".Rmd")
-      temp_pdf <- tempfile(fileext = ".pdf")
-      
-      # Copy template to temp location
-      template_path <- file.path("PBE_SHINY", "report_template.Rmd")
-      if (!file.exists(template_path)) {
-        template_path <- "report_template.Rmd"  # fallback
-      }
-      file.copy(template_path, temp_rmd)
-      
       tryCatch({
-        # Render the R Markdown to PDF with parameters
-        rmarkdown::render(
-          temp_rmd,
-          output_format = "pdf_document",
-          output_file = temp_pdf,
-          params = list(
-            results = values$results,
-            components = values$components,
-            data_summary = values$data
-          ),
-          quiet = TRUE
+        # Generate the same HTML content as displayed in the app
+        results <- values$results
+        components <- values$components
+        data_summary <- values$data
+        
+        # Create complete HTML document
+        html_content <- paste0(
+          '<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Population Bioequivalence (PBE) Analysis Report</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .table { margin: 20px 0; }
+    .text-center { text-align: center; }
+    .mb-4 { margin-bottom: 1.5rem; }
+    .mt-4 { margin-top: 1.5rem; }
+    hr { margin: 2rem 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="text-center mb-4">
+      <h2>Population Bioequivalence (PBE) Analysis Report</h2>
+      <h4>FDA Draft Guidance Format</h4>
+      <p>Generated: ', Sys.Date(), '</p>
+    </div>
+    
+    <h3>Study Summary</h3>
+    <p><strong>PSG Method:</strong> ', ifelse(results$psg_method == "fluticasone", "Fluticasone Propionate PSG", "Budesonide PSG"), '</p>
+    <p><strong>Selected Procedure:</strong> ', ifelse(results$use_reference_scaled, "Reference-scaled", "Constant-scaled"), '</p>
+    <p><strong>Procedure Selection:</strong> σ_R (', sprintf("%.6f", results$sigma_r), ')', ifelse(results$use_reference_scaled, " > ", " ≤ "), 'σ_T0 (0.1)</p>
+    
+    <hr>
+    
+    <h3>Reference-Scaled Analysis Results</h3>',
+    
+    # Reference-scaled table
+    if(results$psg_method == "fluticasone") {
+      # Fluticasone PSG - exclude ED/UD terms
+      ref_data <- data.frame(
+        col1 = c(
+          sprintf("E1 = %.9f", components$e1), 
+          sprintf("E2 = %.8f", components$e2),
+          sprintf("E3s = %.9f", components$e3s),
+          sprintf("E4s = %.9f", components$e4s),
+          sprintf("<strong>Eq = %.8f</strong>", results$eq_ref)
+        ),
+        col2 = c(
+          sprintf("H1 = %.9f", components$h1),
+          sprintf("H2 = %.8f", components$h2), 
+          sprintf("H3s = %.9f", components$h3s),
+          sprintf("H4s = %.9f", components$h4s),
+          ""
+        ),
+        col3 = c(
+          sprintf("U1 = %.8f", components$u1),
+          sprintf("U2 = %.9f", components$u2),
+          sprintf("U3 = %.8f", components$u3),
+          sprintf("U4 = %.8f", components$u4),
+          sprintf("<strong>Uq = %.9f</strong>", results$uq_ref)
+        ),
+        col4 = c(
+          "", "", "", "",
+          sprintf("<strong>Hη = %.9f</strong>", results$hq_ref)
+        )
+      )
+      
+      ref_table <- kable(ref_data, format = "html", escape = FALSE, 
+                        col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                        table.attr = 'class="table table-striped table-hover"') %>%
+                   as.character()
+                   
+    } else {
+      # Budesonide PSG - include ED/UD terms
+      ref_data <- data.frame(
+        col1 = c(
+          sprintf("ED = %.9f", components$ed),
+          sprintf("E1 = %.9f", components$e1), 
+          sprintf("E2 = %.8f", components$e2),
+          sprintf("E3s = %.9f", components$e3s),
+          sprintf("E4s = %.9f", components$e4s),
+          sprintf("<strong>Eq = %.8f</strong>", results$eq_ref)
+        ),
+        col2 = c(
+          sprintf("HD = %.9f", components$hd),
+          sprintf("H1 = %.9f", components$h1),
+          sprintf("H2 = %.8f", components$h2), 
+          sprintf("H3s = %.9f", components$h3s),
+          sprintf("H4s = %.9f", components$h4s),
+          ""
+        ),
+        col3 = c(
+          sprintf("UD = %.9f", components$ud),
+          sprintf("U1 = %.8f", components$u1),
+          sprintf("U2 = %.9f", components$u2),
+          sprintf("U3 = %.8f", components$u3),
+          sprintf("U4 = %.8f", components$u4),
+          sprintf("<strong>Uq = %.9f</strong>", results$uq_ref)
+        ),
+        col4 = c(
+          "", "", "", "", "",
+          sprintf("<strong>Hη = %.9f</strong>", results$hq_ref)
+        )
+      )
+      
+      ref_table <- kable(ref_data, format = "html", escape = FALSE, 
+                        col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                        table.attr = 'class="table table-striped table-hover"') %>%
+                   as.character()
+    },
+    
+    ref_table,
+    
+    '<hr>
+    
+    <h3>Constant-Scaled Analysis Results</h3>',
+    
+    # Constant-scaled table
+    if(results$psg_method == "fluticasone") {
+      # Fluticasone PSG - exclude ED/UD terms
+      const_data <- data.frame(
+        col1 = c(
+          sprintf("E1 = %.9f", components$e1),
+          sprintf("E2 = %.8f", components$e2),
+          sprintf("E3c = %.9f", components$e3c),
+          sprintf("E4c = %.8f", components$e4c),
+          sprintf("<strong>Eq = %.9f</strong>", results$eq_const)
+        ),
+        col2 = c(
+          sprintf("H1 = %.9f", components$h1),
+          sprintf("H2 = %.8f", components$h2),
+          sprintf("H3c = %.9f", components$h3c),
+          sprintf("H4c = %.8f", components$h4c),
+          ""
+        ),
+        col3 = c(
+          sprintf("U1 = %.8f", components$u1),
+          sprintf("U2 = %.9f", components$u2),
+          sprintf("U3c = %.9f", components$u3c),
+          sprintf("U4c = %.9f", components$u4c),
+          sprintf("<strong>Uq = %.9f</strong>", results$uq_const)
+        ),
+        col4 = c(
+          "", "", "", "",
+          sprintf("<strong>Hη = %.9f</strong>", results$hq_const)
+        )
+      )
+      
+      const_table <- kable(const_data, format = "html", escape = FALSE,
+                          col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                          table.attr = 'class="table table-striped table-hover"') %>%
+                     as.character()
+                     
+    } else {
+      # Budesonide PSG - include ED/UD terms
+      const_data <- data.frame(
+        col1 = c(
+          sprintf("ED = %.9f", components$ed),
+          sprintf("E1 = %.9f", components$e1),
+          sprintf("E2 = %.8f", components$e2),
+          sprintf("E3c = %.9f", components$e3c),
+          sprintf("E4c = %.8f", components$e4c),
+          sprintf("<strong>Eq = %.9f</strong>", results$eq_const)
+        ),
+        col2 = c(
+          sprintf("HD = %.9f", components$hd),
+          sprintf("H1 = %.9f", components$h1),
+          sprintf("H2 = %.8f", components$h2),
+          sprintf("H3c = %.9f", components$h3c),
+          sprintf("H4c = %.8f", components$h4c),
+          ""
+        ),
+        col3 = c(
+          sprintf("UD = %.9f", components$ud),
+          sprintf("U1 = %.8f", components$u1),
+          sprintf("U2 = %.9f", components$u2),
+          sprintf("U3c = %.9f", components$u3c),
+          sprintf("U4c = %.9f", components$u4c),
+          sprintf("<strong>Uq = %.9f</strong>", results$uq_const)
+        ),
+        col4 = c(
+          "", "", "", "", "",
+          sprintf("<strong>Hη = %.9f</strong>", results$hq_const)
+        )
+      )
+      
+      const_table <- kable(const_data, format = "html", escape = FALSE,
+                          col.names = c("Point Estimates (Eq)", "Upper Bounds (Hq)", "Variance Terms (Uq)", "Final Result"),
+                          table.attr = 'class="table table-striped table-hover"') %>%
+                     as.character()
+    },
+    
+    const_table,
+    
+    '<hr>
+    
+    <h3>Table 2: Summary of PBE Results</h3>',
+    
+    # Summary table
+    {
+      summary_table <- data.frame(
+        Variable = c(
+          "In Vitro Measurement",
+          "Reference-scaled Procedure", 
+          "Constant-scaled Procedure"
+        ),
+        `Geometric Mean Test` = c(
+          sprintf("%.6f", exp(results$test_mean)),
+          sprintf("%.9f", results$eq_ref),
+          sprintf("%.9f", results$eq_const)
+        ),
+        `Geometric Mean Reference` = c(
+          sprintf("%.6f", exp(results$ref_mean)),
+          sprintf("%.9f", results$hq_ref),
+          sprintf("%.9f", results$hq_const)
+        ),
+        `Geometric Mean Ratio` = c(
+          sprintf("%.6f", exp(results$test_mean) / exp(results$ref_mean)),
+          ifelse(results$bioequivalent_ref, "<strong>PASS</strong>", "<strong>FAIL</strong>"),
+          ifelse(results$bioequivalent_const, "<strong>PASS</strong>", "<strong>FAIL</strong>")
+        ),
+        `Standard Deviation SigmaT` = c(
+          sprintf("%.6f", results$sigma_t),
+          "", ""
+        ),
+        `Standard Deviation SigmaR` = c(
+          sprintf("%.6f", results$sigma_r),
+          "", ""
+        ),
+        `SigmaT/SigmaR Ratio` = c(
+          sprintf("%.6f", results$sigma_t / results$sigma_r),
+          "", ""
+        ),
+        check.names = FALSE
+      )
+      
+      kable(summary_table, format = "html", escape = FALSE,
+            table.attr = 'class="table table-striped table-hover"') %>%
+        as.character()
+    },
+    
+    '<hr>
+    
+    <h3>Final Bioequivalence Results</h3>',
+    
+    # Final results table
+    {
+      final_data <- data.frame(
+        Procedure = c("Reference-Scaled", "Constant-Scaled"),
+        `Point Estimate (Eq)` = c(
+          sprintf("%.9f", results$eq_ref),
+          sprintf("%.9f", results$eq_const)
+        ),
+        `Variance Term (Uq)` = c(
+          sprintf("%.9f", results$uq_ref),
+          sprintf("%.9f", results$uq_const)
+        ),
+        `Upper Confidence Bound (Hη)` = c(
+          sprintf("%.9f", results$hq_ref),
+          sprintf("%.9f", results$hq_const)
+        ),
+        Decision = c(
+          ifelse(results$bioequivalent_ref, "<strong>BIOEQUIVALENT</strong>", "<strong>NOT BIOEQUIVALENT</strong>"),
+          ifelse(results$bioequivalent_const, "<strong>BIOEQUIVALENT</strong>", "<strong>NOT BIOEQUIVALENT</strong>")
+        ),
+        check.names = FALSE
+      )
+      
+      kable(final_data, format = "html", escape = FALSE,
+            table.attr = 'class="table table-striped table-hover"') %>%
+        as.character()
+    },
+    
+    '<hr>
+    
+    <h3>Appendix</h3>
+    <h4>Table 1: Complete Individual Data of In Vitro Tests</h4>',
+    
+    # Individual data table
+    {
+      full_data <- data_summary[, c("Batch", "Container", "Stage", "Product", "Measurement")]
+      names(full_data) <- c("Batches", "Container", "Stage", "Product", "In vitro measurement (original data)")
+      full_data$`In vitro measurement (original data)` <- sprintf("%.6f", full_data$`In vitro measurement (original data)`)
+      
+      kable(full_data, format = "html",
+            table.attr = 'class="table table-striped table-hover table-sm"') %>%
+        as.character()
+    },
+    
+    '<hr>
+    <p><strong>Report Generated:</strong> ', as.character(Sys.time()), '</p>
+  </div>
+</body>
+</html>'
         )
         
-        # Copy the generated PDF to the download file
-        file.copy(temp_pdf, file)
-        
-        # Clean up temp files
-        unlink(c(temp_rmd, temp_pdf))
+        # Write HTML to file
+        writeLines(html_content, file, useBytes = TRUE)
         
       }, error = function(e) {
-        # Fallback: create a simple text file if PDF generation fails
-        report_content <- paste(
-          "PBE Analysis Report",
-          paste("Generated:", Sys.time()),
-          paste("PSG Method:", values$results$psg_method),
-          "",
-          "PDF generation failed. Please check that you have LaTeX installed.",
-          paste("Error:", e$message),
-          sep = "\n"
+        # Fallback: create a simple HTML file if generation fails
+        error_html <- paste0(
+          '<!DOCTYPE html>
+<html>
+<head><title>PBE Analysis Report - Error</title></head>
+<body>
+  <h1>PBE Analysis Report</h1>
+  <p>Generated: ', Sys.time(), '</p>
+  <p>PSG Method: ', values$results$psg_method, '</p>
+  <hr>
+  <p><strong>Error generating report:</strong> ', e$message, '</p>
+</body>
+</html>'
         )
-        writeLines(report_content, file)
+        writeLines(error_html, file, useBytes = TRUE)
       })
     }
   )
