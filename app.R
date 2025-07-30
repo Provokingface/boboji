@@ -516,14 +516,14 @@ server <- function(input, output, session) {
       all_components <- c(components, ref_components, const_components)
       
       # Automatically determine PSG method based on μ_T and μ_R
-      # Calculate μ_T and μ_R (arithmetic means)
-      mu_t <- test_mean
-      mu_r <- ref_mean
+      # Calculate μ_T and μ_R (log-transformed arithmetic means)
+      mu_t <- test_log_mean  # Use log-transformed mean for PSG method selection
+      mu_r <- ref_log_mean   # Use log-transformed mean for PSG method selection
       
       # Determine PSG method based on PSG guidance criteria:
       # Traditional PBE (includes ED/UD): when μ_T > μ_R
       # Modified one-sided PBE (excludes ED/UD): when μ_T < μ_R
-      mean_ratio <- mu_t / mu_r
+      mean_ratio <- mu_t / mu_r  # Ratio of log-transformed means
       psg_method <- ifelse(mu_t < mu_r, "fluticasone", "budesonide")
       
       # Handle different PSG methods
