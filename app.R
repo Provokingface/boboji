@@ -206,19 +206,6 @@ ui <- page_sidebar(
     
     tags$hr(),
     
-    # PSG Method Selection
-    h4("PSG Method"),
-    radioButtons("psg_method", 
-                label = "Select Analysis Method:",
-                choices = list(
-                  "Budesonide PSG" = "budesonide",
-                  "Fluticasone Propionate PSG" = "fluticasone"
-                ),
-                selected = "budesonide",
-                width = "100%"),
-    
-    tags$hr(),
-    
     # Column Mapping Section
     conditionalPanel(
       condition = "output.show_mapping",
@@ -533,11 +520,11 @@ server <- function(input, output, session) {
       mu_t <- test_mean
       mu_r <- ref_mean
       
-      # Determine PSG method based on comparison of μ_T and μ_R
-      # Use modified PBE (excludes ED/UD) if means are similar, otherwise use standard PBE
-      # Criterion: if the ratio of means is close to 1 (within 10%), use modified method
+      # Determine PSG method based on PSG guidance criteria:
+      # Traditional PBE (includes ED/UD): when μ_T > μ_R
+      # Modified one-sided PBE (excludes ED/UD): when μ_T < μ_R
       mean_ratio <- mu_t / mu_r
-      psg_method <- ifelse(abs(mean_ratio - 1) < 0.1, "fluticasone", "budesonide")
+      psg_method <- ifelse(mu_t < mu_r, "fluticasone", "budesonide")
       
       # Handle different PSG methods
       if (psg_method == "fluticasone") {
@@ -643,8 +630,8 @@ server <- function(input, output, session) {
         h3("Study Summary"),
         p(strong("PSG Method:"), ifelse(results$psg_method == "fluticasone", "Modified PBE (Fluticasone-type)", "Standard PBE (Budesonide-type)"), 
           " - ", em("(automatically determined)")),
-        p(strong("Method Selection Criteria:"), paste("μ_T/μ_R =", sprintf("%.4f", results$mean_ratio), 
-                                                     ifelse(results$psg_method == "fluticasone", "(≈1, excludes ED/UD)", "(≠1, includes ED/UD)"))),
+        p(strong("Method Selection Criteria:"), paste("μ_T =", sprintf("%.4f", results$mu_t), ", μ_R =", sprintf("%.4f", results$mu_r), 
+                                                     ifelse(results$psg_method == "fluticasone", "(μ_T < μ_R, excludes ED/UD)", "(μ_T ≥ μ_R, includes ED/UD)"))),
         p(strong("Selected Procedure:"), ifelse(results$use_reference_scaled, "Reference-scaled", "Constant-scaled")),
         p(strong("Procedure Selection:"), paste("σ_R (", sprintf("%.6f", results$sigma_r), ")", ifelse(results$use_reference_scaled, " > ", " ≤ "), "σ_T0 (0.1)")),
         
@@ -997,7 +984,7 @@ server <- function(input, output, session) {
     
     <h3>Study Summary</h3>
     <p><strong>PSG Method:</strong> ', ifelse(results$psg_method == "fluticasone", "Modified PBE (Fluticasone-type)", "Standard PBE (Budesonide-type)"), ' - <em>(automatically determined)</em></p>
-    <p><strong>Method Selection Criteria:</strong> μ_T/μ_R = ', sprintf("%.4f", results$mean_ratio), ifelse(results$psg_method == "fluticasone", " (≈1, excludes ED/UD)", " (≠1, includes ED/UD)"), '</p>
+    <p><strong>Method Selection Criteria:</strong> μ_T = ', sprintf("%.4f", results$mu_t), ', μ_R = ', sprintf("%.4f", results$mu_r), ifelse(results$psg_method == "fluticasone", " (μ_T < μ_R, excludes ED/UD)", " (μ_T ≥ μ_R, includes ED/UD)"), '</p>
     <p><strong>Selected Procedure:</strong> ', ifelse(results$use_reference_scaled, "Reference-scaled", "Constant-scaled"), '</p>
     <p><strong>Procedure Selection:</strong> σ_R (', sprintf("%.6f", results$sigma_r), ')', ifelse(results$use_reference_scaled, " > ", " ≤ "), 'σ_T0 (0.1)</p>
     
