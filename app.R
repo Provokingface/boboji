@@ -71,7 +71,12 @@ calculate_msb_msw <- function(data_df, m) {
     msw_sum <- msw_sum + sum((container_data$Measurement - container_mean)^2)
   }
   
-  msw <- msw_sum / (n_containers * (m - 1))
+  # Handle single stage case (m = 1)
+  if (m == 1) {
+    msw <- 0  # No within-container variability when m = 1
+  } else {
+    msw <- msw_sum / (n_containers * (m - 1))
+  }
   
   return(list(msb = msb, msw = msw, container_stats = container_stats))
 }
@@ -114,11 +119,17 @@ calculate_pbe_components <- function(delta, msb_t, msw_t, msb_r, msw_r, n_t, l_t
   e2 <- (m - 1) * msw_t / m
   components$e2 <- e2
   
-  # H2 Component (Chi-square) - Lower tail for test product
-  df2 <- l_t * n_t * (m - 1)
-  chi2_critical_2 <- qchisq(alpha, df2)  # Lower tail for H1, H2
-  h2 <- l_t * n_t * (m - 1) * e2 / chi2_critical_2
-  u2 <- (h2 - e2)^2  # CORRECTED: U = (H-E)²
+  # H2 Component (Chi-square) - Lower tail for test product  
+  if (m == 1) {
+    # When m = 1, no within-container variability, so H2 = E2
+    h2 <- e2  # Both are 0 when m = 1
+    u2 <- 0   # No variance when m = 1
+  } else {
+    df2 <- l_t * n_t * (m - 1)
+    chi2_critical_2 <- qchisq(alpha, df2)  # Lower tail for H1, H2
+    h2 <- l_t * n_t * (m - 1) * e2 / chi2_critical_2
+    u2 <- (h2 - e2)^2  # CORRECTED: U = (H-E)²
+  }
   
   components$h2 <- h2
   components$u2 <- u2
@@ -147,10 +158,16 @@ calculate_reference_scaled_components <- function(msb_r, msw_r, n_r, l_r, m, the
   ref_components$e4s <- e4s
   
   # H4s Component (Chi-square) - Upper tail for reference product
-  df4 <- l_r * n_r * (m - 1)
-  chi2_critical_4 <- qchisq(1 - alpha, df4)  # Upper tail for H3s, H4s
-  h4s <- l_r * n_r * (m - 1) * e4s / chi2_critical_4
-  u4s <- (h4s - e4s)^2  # CORRECTED: U = (H-E)²
+  if (m == 1) {
+    # When m = 1, no within-container variability, so H4s = E4s
+    h4s <- e4s  # Both are 0 when m = 1
+    u4s <- 0    # No variance when m = 1
+  } else {
+    df4 <- l_r * n_r * (m - 1)
+    chi2_critical_4 <- qchisq(1 - alpha, df4)  # Upper tail for H3s, H4s
+    h4s <- l_r * n_r * (m - 1) * e4s / chi2_critical_4
+    u4s <- (h4s - e4s)^2  # CORRECTED: U = (H-E)²
+  }
   
   ref_components$h4s <- h4s
   ref_components$u4 <- u4s
@@ -179,10 +196,16 @@ calculate_constant_scaled_components <- function(msb_r, msw_r, n_r, l_r, m, alph
   const_components$e4c <- e4c
   
   # H4c Component - Upper tail for reference product
-  df4 <- l_r * n_r * (m - 1)
-  chi2_critical_4 <- qchisq(1 - alpha, df4)
-  h4c <- l_r * n_r * (m - 1) * e4c / chi2_critical_4
-  u4c <- (h4c - e4c)^2  # CORRECTED: U = (H-E)²
+  if (m == 1) {
+    # When m = 1, no within-container variability, so H4c = E4c
+    h4c <- e4c  # Both are 0 when m = 1
+    u4c <- 0    # No variance when m = 1
+  } else {
+    df4 <- l_r * n_r * (m - 1)
+    chi2_critical_4 <- qchisq(1 - alpha, df4)
+    h4c <- l_r * n_r * (m - 1) * e4c / chi2_critical_4
+    u4c <- (h4c - e4c)^2  # CORRECTED: U = (H-E)²
+  }
   
   const_components$h4c <- h4c
   const_components$u4c <- u4c
