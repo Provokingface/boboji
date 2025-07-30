@@ -902,30 +902,75 @@ server <- function(input, output, session) {
             HTML()
         },
         
+        # Log-transformed Statistics Table
+        h4("Log-Transformed Summary Statistics"),
+        {
+          log_stats_table <- data.frame(
+            Parameter = c(
+              "μ_T (log-transformed mean - Test)",
+              "μ_R (log-transformed mean - Reference)", 
+              "Mean Difference (μ_T - μ_R)",
+              "σ_T (Standard Deviation - Test)",
+              "σ_R (Standard Deviation - Reference)",
+              "Standard Deviation Ratio (σ_T/σ_R)"
+            ),
+            Value = c(
+              sprintf("%.6f", results$mu_t),
+              sprintf("%.6f", results$mu_r),
+              sprintf("%.6f", results$mu_t - results$mu_r),
+              sprintf("%.6f", results$sigma_t),
+              sprintf("%.6f", results$sigma_r),
+              sprintf("%.6f", results$sigma_t / results$sigma_r)
+            ),
+            check.names = FALSE
+          )
+          
+          log_stats_table %>%
+            kable(format = "html", escape = FALSE,
+                  caption = "Log-Transformed Summary Statistics") %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                          full_width = TRUE, font_size = 14) %>%
+            row_spec(c(1,2,3), background = "#f0f8ff") %>%
+            row_spec(c(4,5,6), background = "#f8f9fa") %>%
+            HTML()
+        },
+        
         # Data Visualizations
         h4("Data Visualizations"),
-        h5("Data Distribution by Product"),
+        h5("Log-Transformed Measurements by Product and Stage"),
         renderPlot({
-          ggplot(data_summary, aes(x = Measurement, fill = Product)) +
-            geom_histogram(alpha = 0.7, bins = 20, position = "identity") +
+          # Add log-transformed measurement column to data
+          data_with_log <- data_summary %>%
+            mutate(LogMeasurement = log(Measurement))
+          
+          ggplot(data_with_log, aes(x = Stage, y = LogMeasurement, fill = Product)) +
+            geom_boxplot(alpha = 0.8) +
             scale_fill_manual(values = c("TEST" = "skyblue", "REF" = "lightcoral")) +
-            labs(title = "Distribution of Measurements by Product",
-                 x = "Measurement Value", y = "Count") +
+            labs(title = "Log-Transformed In Vitro Measurements by Product and Stage",
+                 x = "Life Stage", y = "Log-Transformed Measurement") +
             theme_minimal() +
             theme(legend.position = "top",
-                  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+                  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+                  axis.text.x = element_text(size = 12),
+                  axis.text.y = element_text(size = 12))
         }),
         
-        h5("Batch-to-Batch Variability"),  
+        h5("Log-Transformed Measurements by Product"),
         renderPlot({
-          ggplot(data_summary, aes(x = factor(Batch), y = Measurement, fill = Product)) +
-            geom_boxplot() +
+          # Add log-transformed measurement column to data
+          data_with_log <- data_summary %>%
+            mutate(LogMeasurement = log(Measurement))
+          
+          ggplot(data_with_log, aes(x = Product, y = LogMeasurement, fill = Product)) +
+            geom_boxplot(alpha = 0.8) +
             scale_fill_manual(values = c("TEST" = "skyblue", "REF" = "lightcoral")) +
-            labs(title = "Batch-to-Batch Variability",
-                 x = "Batch", y = "Measurement") +
+            labs(title = "Log-Transformed In Vitro Measurements by Product",
+                 x = "Product", y = "Log-Transformed Measurement") +
             theme_minimal() +
-            theme(legend.position = "top",
-                  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+            theme(legend.position = "none",
+                  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+                  axis.text.x = element_text(size = 12),
+                  axis.text.y = element_text(size = 12))
         }),
         
         hr(),
@@ -1232,6 +1277,35 @@ server <- function(input, output, session) {
       
       kable(full_data, format = "html",
             table.attr = 'class="table table-striped table-hover table-sm"') %>%
+        as.character()
+    },
+    
+    '<h4>Log-Transformed Summary Statistics</h4>',
+    
+    # Log-transformed statistics table
+    {
+      log_stats_table <- data.frame(
+        Parameter = c(
+          "μ_T (log-transformed mean - Test)",
+          "μ_R (log-transformed mean - Reference)", 
+          "Mean Difference (μ_T - μ_R)",
+          "σ_T (Standard Deviation - Test)",
+          "σ_R (Standard Deviation - Reference)",
+          "Standard Deviation Ratio (σ_T/σ_R)"
+        ),
+        Value = c(
+          sprintf("%.6f", results$mu_t),
+          sprintf("%.6f", results$mu_r),
+          sprintf("%.6f", results$mu_t - results$mu_r),
+          sprintf("%.6f", results$sigma_t),
+          sprintf("%.6f", results$sigma_r),
+          sprintf("%.6f", results$sigma_t / results$sigma_r)
+        ),
+        check.names = FALSE
+      )
+      
+      kable(log_stats_table, format = "html", escape = FALSE,
+            table.attr = 'class="table table-striped table-hover"') %>%
         as.character()
     },
     
