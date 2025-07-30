@@ -520,6 +520,10 @@ server <- function(input, output, session) {
       mu_t <- test_log_mean  # Use log-transformed mean for PSG method selection
       mu_r <- ref_log_mean   # Use log-transformed mean for PSG method selection
       
+      # Calculate sample standard deviations of log-transformed measurements (different from PBE sigma values)
+      sd_log_t <- sd(log(test_df$Measurement))  # Sample SD of log-transformed test measurements
+      sd_log_r <- sd(log(ref_df$Measurement))   # Sample SD of log-transformed reference measurements
+      
       # Determine PSG method based on PSG guidance criteria:
       # Traditional PBE (includes ED/UD): when μ_T > μ_R
       # Modified one-sided PBE (excludes ED/UD): when μ_T < μ_R
@@ -577,6 +581,8 @@ server <- function(input, output, session) {
         ref_mean = ref_mean,
         mu_t = mu_t,
         mu_r = mu_r,
+        sd_log_t = sd_log_t,
+        sd_log_r = sd_log_r,
         mean_ratio = mean_ratio,
         test_log_mean = test_log_mean,
         ref_log_mean = ref_log_mean,
@@ -910,17 +916,17 @@ server <- function(input, output, session) {
               "μ_T (log-transformed mean - Test)",
               "μ_R (log-transformed mean - Reference)", 
               "Mean Difference (μ_T - μ_R)",
-              "σ_T (Standard Deviation - Test)",
-              "σ_R (Standard Deviation - Reference)",
-              "Standard Deviation Ratio (σ_T/σ_R)"
+              "SD_log_T (Sample SD of log-transformed - Test)",
+              "SD_log_R (Sample SD of log-transformed - Reference)",
+              "Sample SD Ratio (SD_log_T/SD_log_R)"
             ),
             Value = c(
               sprintf("%.6f", results$mu_t),
               sprintf("%.6f", results$mu_r),
               sprintf("%.6f", results$mu_t - results$mu_r),
-              sprintf("%.6f", results$sigma_t),
-              sprintf("%.6f", results$sigma_r),
-              sprintf("%.6f", results$sigma_t / results$sigma_r)
+              sprintf("%.6f", results$sd_log_t),
+              sprintf("%.6f", results$sd_log_r),
+              sprintf("%.6f", results$sd_log_t / results$sd_log_r)
             ),
             check.names = FALSE
           )
@@ -1289,17 +1295,17 @@ server <- function(input, output, session) {
           "μ_T (log-transformed mean - Test)",
           "μ_R (log-transformed mean - Reference)", 
           "Mean Difference (μ_T - μ_R)",
-          "σ_T (Standard Deviation - Test)",
-          "σ_R (Standard Deviation - Reference)",
-          "Standard Deviation Ratio (σ_T/σ_R)"
+          "SD_log_T (Sample SD of log-transformed - Test)",
+          "SD_log_R (Sample SD of log-transformed - Reference)",
+          "Sample SD Ratio (SD_log_T/SD_log_R)"
         ),
         Value = c(
           sprintf("%.6f", results$mu_t),
           sprintf("%.6f", results$mu_r),
           sprintf("%.6f", results$mu_t - results$mu_r),
-          sprintf("%.6f", results$sigma_t),
-          sprintf("%.6f", results$sigma_r),
-          sprintf("%.6f", results$sigma_t / results$sigma_r)
+          sprintf("%.6f", results$sd_log_t),
+          sprintf("%.6f", results$sd_log_r),
+          sprintf("%.6f", results$sd_log_t / results$sd_log_r)
         ),
         check.names = FALSE
       )
