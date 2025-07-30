@@ -528,8 +528,19 @@ server <- function(input, output, session) {
       # Combine all components
       all_components <- c(components, ref_components, const_components)
       
+      # Automatically determine PSG method based on μ_T and μ_R
+      # Calculate μ_T and μ_R (arithmetic means)
+      mu_t <- test_mean
+      mu_r <- ref_mean
+      
+      # Determine PSG method based on comparison of μ_T and μ_R
+      # Use modified PBE (excludes ED/UD) if means are similar, otherwise use standard PBE
+      # Criterion: if the ratio of means is close to 1 (within 10%), use modified method
+      mean_ratio <- mu_t / mu_r
+      psg_method <- ifelse(abs(mean_ratio - 1) < 0.1, "fluticasone", "budesonide")
+      
       # Handle different PSG methods
-      if (input$psg_method == "fluticasone") {
+      if (psg_method == "fluticasone") {
         # Fluticasone Propionate - EXCLUDE ED and UD terms
         # Reference-scaled procedure (without ED/UD)
         eq_ref <- all_components$e1 + all_components$e2 + 
@@ -577,6 +588,9 @@ server <- function(input, output, session) {
       values$results <- list(
         test_mean = test_mean,
         ref_mean = ref_mean,
+        mu_t = mu_t,
+        mu_r = mu_r,
+        mean_ratio = mean_ratio,
         test_log_mean = test_log_mean,
         ref_log_mean = ref_log_mean,
         test_geomean = test_geomean,
@@ -590,7 +604,7 @@ server <- function(input, output, session) {
         use_reference_scaled = use_reference_scaled,
         eq_ref = eq_ref, uq_ref = uq_ref, hq_ref = hq_ref, bioequivalent_ref = bioequivalent_ref,
         eq_const = eq_const, uq_const = uq_const, hq_const = hq_const, bioequivalent_const = bioequivalent_const,
-        psg_method = input$psg_method,
+        psg_method = psg_method,
         fluticasone_results = fluticasone_results
       )
       
@@ -627,7 +641,10 @@ server <- function(input, output, session) {
         
         # Study Summary
         h3("Study Summary"),
-        p(strong("PSG Method:"), ifelse(results$psg_method == "fluticasone", "Fluticasone Propionate PSG", "Budesonide PSG")),
+        p(strong("PSG Method:"), ifelse(results$psg_method == "fluticasone", "Modified PBE (Fluticasone-type)", "Standard PBE (Budesonide-type)"), 
+          " - ", em("(automatically determined)")),
+        p(strong("Method Selection Criteria:"), paste("μ_T/μ_R =", sprintf("%.4f", results$mean_ratio), 
+                                                     ifelse(results$psg_method == "fluticasone", "(≈1, excludes ED/UD)", "(≠1, includes ED/UD)"))),
         p(strong("Selected Procedure:"), ifelse(results$use_reference_scaled, "Reference-scaled", "Constant-scaled")),
         p(strong("Procedure Selection:"), paste("σ_R (", sprintf("%.6f", results$sigma_r), ")", ifelse(results$use_reference_scaled, " > ", " ≤ "), "σ_T0 (0.1)")),
         
@@ -805,55 +822,43 @@ server <- function(input, output, session) {
         
         hr(),
         
-        # Table 2: Summary of PBE Results
-        h3("Table 2: Summary of PBE Results"),
+        # Table 2: Basic Summary Statistics  
+        h3("Table 2: Basic Summary Statistics"),
         {
-          summary_table <- data.frame(
+          basic_stats_table <- data.frame(
             Variable = c(
-              "In Vitro Measurement",
-              "Reference-scaled Procedure", 
-              "Constant-scaled Procedure"
+              "In Vitro Measurement"
             ),
             `Geometric Mean Test` = c(
-              sprintf("%.6f", results$test_geomean),
-              sprintf("%.9f", results$eq_ref),
-              sprintf("%.9f", results$eq_const)
+              sprintf("%.6f", results$test_geomean)
             ),
             `Geometric Mean Reference` = c(
-              sprintf("%.6f", results$ref_geomean),
-              sprintf("%.9f", results$hq_ref),
-              sprintf("%.9f", results$hq_const)
+              sprintf("%.6f", results$ref_geomean)
             ),
             `Geometric Mean Ratio` = c(
-              sprintf("%.6f", results$test_geomean / results$ref_geomean),
-              ifelse(results$bioequivalent_ref, "PASS", "FAIL"),
-              ifelse(results$bioequivalent_const, "PASS", "FAIL")
+              sprintf("%.6f", results$test_geomean / results$ref_geomean)
             ),
             `Standard Deviation SigmaT` = c(
-              sprintf("%.6f", results$sigma_t),
-              "", ""
+              sprintf("%.6f", results$sigma_t)
             ),
             `Standard Deviation SigmaR` = c(
-              sprintf("%.6f", results$sigma_r),
-              "", ""
+              sprintf("%.6f", results$sigma_r)
             ),
             `SigmaT/SigmaR Ratio` = c(
-              sprintf("%.6f", results$sigma_t / results$sigma_r),
-              "", ""
+              sprintf("%.6f", results$sigma_t / results$sigma_r)
             ),
             check.names = FALSE
           )
           
-          summary_table %>%
+          basic_stats_table %>%
             kable(format = "html", escape = FALSE,
-                  caption = "Table 2. Summary Tables of PBE Results") %>%
+                  caption = "Table 2. Basic Summary Statistics") %>%
             kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
                           full_width = TRUE, font_size = 14) %>%
             row_spec(1, background = "#f8f9fa") %>%
-            row_spec(2, background = "#e8f5e8") %>%
-            row_spec(3, background = "#fff3cd") %>%
             HTML()
         },
+        
         
         hr(),
         
@@ -991,7 +996,8 @@ server <- function(input, output, session) {
     </div>
     
     <h3>Study Summary</h3>
-    <p><strong>PSG Method:</strong> ', ifelse(results$psg_method == "fluticasone", "Fluticasone Propionate PSG", "Budesonide PSG"), '</p>
+    <p><strong>PSG Method:</strong> ', ifelse(results$psg_method == "fluticasone", "Modified PBE (Fluticasone-type)", "Standard PBE (Budesonide-type)"), ' - <em>(automatically determined)</em></p>
+    <p><strong>Method Selection Criteria:</strong> μ_T/μ_R = ', sprintf("%.4f", results$mean_ratio), ifelse(results$psg_method == "fluticasone", " (≈1, excludes ED/UD)", " (≠1, includes ED/UD)"), '</p>
     <p><strong>Selected Procedure:</strong> ', ifelse(results$use_reference_scaled, "Reference-scaled", "Constant-scaled"), '</p>
     <p><strong>Procedure Selection:</strong> σ_R (', sprintf("%.6f", results$sigma_r), ')', ifelse(results$use_reference_scaled, " > ", " ≤ "), 'σ_T0 (0.1)</p>
     
@@ -1159,50 +1165,40 @@ server <- function(input, output, session) {
     
     '<hr>
     
-    <h3>Table 2: Summary of PBE Results</h3>',
+    <h3>Table 2: Basic Summary Statistics</h3>',
     
-    # Summary table
+    # Basic statistics table
     {
-      summary_table <- data.frame(
+      basic_stats_table <- data.frame(
         Variable = c(
-          "In Vitro Measurement",
-          "Reference-scaled Procedure", 
-          "Constant-scaled Procedure"
+          "In Vitro Measurement"
         ),
         `Geometric Mean Test` = c(
-          sprintf("%.6f", results$test_geomean),
-          sprintf("%.9f", results$eq_ref),
-          sprintf("%.9f", results$eq_const)
+          sprintf("%.6f", results$test_geomean)
         ),
         `Geometric Mean Reference` = c(
-          sprintf("%.6f", results$ref_geomean),
-          sprintf("%.9f", results$hq_ref),
-          sprintf("%.9f", results$hq_const)
+          sprintf("%.6f", results$ref_geomean)
         ),
         `Geometric Mean Ratio` = c(
-          sprintf("%.6f", results$test_geomean / results$ref_geomean),
-          ifelse(results$bioequivalent_ref, "<strong>PASS</strong>", "<strong>FAIL</strong>"),
-          ifelse(results$bioequivalent_const, "<strong>PASS</strong>", "<strong>FAIL</strong>")
+          sprintf("%.6f", results$test_geomean / results$ref_geomean)
         ),
         `Standard Deviation SigmaT` = c(
-          sprintf("%.6f", results$sigma_t),
-          "", ""
+          sprintf("%.6f", results$sigma_t)
         ),
         `Standard Deviation SigmaR` = c(
-          sprintf("%.6f", results$sigma_r),
-          "", ""
+          sprintf("%.6f", results$sigma_r)
         ),
         `SigmaT/SigmaR Ratio` = c(
-          sprintf("%.6f", results$sigma_t / results$sigma_r),
-          "", ""
+          sprintf("%.6f", results$sigma_t / results$sigma_r)
         ),
         check.names = FALSE
       )
       
-      kable(summary_table, format = "html", escape = FALSE,
+      kable(basic_stats_table, format = "html", escape = FALSE,
             table.attr = 'class="table table-striped table-hover"') %>%
         as.character()
     },
+    
     
     '<hr>
     
