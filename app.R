@@ -2,18 +2,45 @@
 # Based on FDA Draft Guidance on Budesonide (September 2012)
 
 library(shiny)
-library(shinydashboard)
+library(bslib)
 library(DT)
 library(ggplot2)
-library(plotly)
 library(readr)
+library(readxl)
+library(openxlsx)
+library(haven)
 library(dplyr)
 library(knitr)
 library(kableExtra)
+library(rmarkdown)
+library(stringr)
 
 # Define regulatory constants
 SIGMA_T0 <- 0.1
 THETA_P <- 2.0891
+
+# Function to automatically detect CSV separator
+detect_separator <- function(file_path, n_lines = 5) {
+  # Read first few lines to detect separator
+  sample_lines <- readLines(file_path, n = n_lines)
+  
+  # Count occurrences of common separators
+  sep_counts <- list(
+    "," = sum(str_count(sample_lines, ",")),
+    ";" = sum(str_count(sample_lines, ";")),
+    "\t" = sum(str_count(sample_lines, "\t"))
+  )
+  
+  # Return the separator with the highest count
+  best_sep <- names(sep_counts)[which.max(sep_counts)]
+  
+  # If no clear winner, default to comma
+  if (sep_counts[[best_sep]] == 0) {
+    return(",")
+  }
+  
+  return(best_sep)
+}
 
 # PBE Calculation Functions
 calculate_msb_msw <- function(data_df, m) {
@@ -56,11 +83,15 @@ calculate_pbe_components <- function(delta, msb_t, msw_t, msb_r, msw_r, n_t, l_t
   ed <- delta^2
   components$ed <- ed
   
-  # HD Component (t-distribution)
+  # HD Component (t-distribution) - Fixed formula based on FDA PSG page 8
+  # The FDA formula shows: HD = (Δ + t_α/2,df × √(variance))^2
+  # where variance = MSB_T/(n_T × l_T × m) + MSB_R/(n_R × l_R × m)
+  # and df = (n_T × l_T - 1) + (n_R × l_R - 1)
   df_pooled <- (l_t * n_t - 1) + (l_r * n_r - 1)
-  t_critical <- qt(1 - alpha/2, df_pooled)
+  t_critical <- qt(1 - alpha, df_pooled)
+  # For budesonide example: df = (10×3-1) + (10×3-1) = 58, α = 0.05
   hd_variance <- msb_t/(n_t * l_t * m) + msb_r/(n_r * l_r * m)
-  hd <- (delta + t_critical * sqrt(hd_variance))^2
+  hd <- (abs(delta) + t_critical * sqrt(hd_variance))^2
   ud <- (hd - ed)^2  # CORRECTED: U = (H-E)²
   
   components$hd <- hd
@@ -109,7 +140,7 @@ calculate_reference_scaled_components <- function(msb_r, msw_r, n_r, l_r, m, the
   u3s <- (h3s - e3s)^2  # CORRECTED: U = (H-E)²
   
   ref_components$h3s <- h3s
-  ref_components$u3s <- u3s
+  ref_components$u3 <- u3s
   
   # E4s Component (Reference MSW - scaled)
   e4s <- -(1 + theta_p) * (m - 1) * msw_r / m
@@ -122,7 +153,7 @@ calculate_reference_scaled_components <- function(msb_r, msw_r, n_r, l_r, m, the
   u4s <- (h4s - e4s)^2  # CORRECTED: U = (H-E)²
   
   ref_components$h4s <- h4s
-  ref_components$u4s <- u4s
+  ref_components$u4 <- u4s
   
   return(ref_components)
 }
@@ -160,161 +191,106 @@ calculate_constant_scaled_components <- function(msb_r, msw_r, n_r, l_r, m, alph
 }
 
 # UI
-ui <- dashboardPage(
-  dashboardHeader(title = "Population Bioequivalence (PBE) Analysis"),
+ui <- page_sidebar(
+  title = "Population Bioequivalence (PBE) Analysis",
+  theme = bs_theme(version = 5, bootswatch = "minty"),
   
-  dashboardSidebar(
-    sidebarMenu(
-      menuItem("Upload Data", tabName = "upload", icon = icon("upload")),
-      menuItem("Results", tabName = "results", icon = icon("table")),
-      menuItem("Visualizations", tabName = "plots", icon = icon("chart-line")),
-      menuItem("Report", tabName = "report", icon = icon("file-alt"))
-    )
-  ),
-  
-  dashboardBody(
-    tags$head(
-      tags$style(HTML("
-        .content-wrapper, .right-side {
-          background-color: #f4f4f4;
-        }
-        .box {
-          margin-bottom: 20px;
-        }
-        .validation-success {
-          color: #27ae60;
-          font-weight: bold;
-        }
-        .validation-warning {
-          color: #f39c12;
-          font-weight: bold;
-        }
-      "))
+  # Sidebar with Upload Data functionality
+  sidebar = sidebar(
+    width = 350,
+    
+    # Data Upload Section
+    h4("Data Upload"),
+    fileInput("file", "Choose CSV, Excel, or XPT File",
+             accept = c(".csv", ".xlsx", ".xls", ".xpt")),
+    
+    tags$hr(),
+    
+    # PSG Method Selection
+    h4("PSG Method"),
+    radioButtons("psg_method", 
+                label = "Select Analysis Method:",
+                choices = list(
+                  "Budesonide PSG" = "budesonide",
+                  "Fluticasone Propionate PSG" = "fluticasone"
+                ),
+                selected = "budesonide",
+                width = "100%"),
+    
+    tags$hr(),
+    
+    # Column Mapping Section
+    conditionalPanel(
+      condition = "output.show_mapping",
+      h4("Column Mapping"),
+      p(tags$small("Map your columns to required parameters:")),
+      
+      div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+          "Batch:",
+          tags$span(title = "Batch numbers or identifiers (e.g., 1, 2, 3 or B1, B2, B3)",
+                   style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
+                   HTML("&#9432;"))
+      ),
+      selectInput("map_batch", label = NULL, choices = NULL, width = "100%"),
+      
+      div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+          "Container:",
+          tags$span(title = "Container/bottle IDs within each batch (e.g., 1-30, C1-C30)",
+                   style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
+                   HTML("&#9432;"))
+      ),
+      selectInput("map_container", label = NULL, choices = NULL, width = "100%"),
+      
+      div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+          "Stage:",
+          tags$span(title = "Life stages - accepts B/Beginning, M/Middle, E/End",
+                   style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
+                   HTML("&#9432;"))
+      ),
+      selectInput("map_stage", label = NULL, choices = NULL, width = "100%"),
+      
+      div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+          "Product:",
+          tags$span(title = "Product type - accepts TEST/REF, T/R, Test/Reference",
+                   style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
+                   HTML("&#9432;"))
+      ),
+      selectInput("map_product", label = NULL, choices = NULL, width = "100%"),
+      
+      div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+          "Measurement:",
+          tags$span(title = "Numeric measurement values (any decimal format)",
+                   style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
+                   HTML("&#9432;"))
+      ),
+      selectInput("map_measurement", label = NULL, choices = NULL, width = "100%"),
+      
+      br(),
+      actionButton("apply_mapping", "Apply Mapping", 
+                  class = "btn-primary btn-sm", width = "100%"),
+      br(), br()
     ),
     
-    tabItems(
-      # Upload Data Tab
-      tabItem(tabName = "upload",
-        fluidRow(
-          box(
-            title = "Data Upload", status = "primary", solidHeader = TRUE, width = 6,
-            fileInput("file", "Choose CSV File",
-                     accept = c(".csv")),
-            checkboxInput("header", "Header", TRUE),
-            radioButtons("sep", "Separator",
-                        choices = c(Comma = ",", Semicolon = ";", Tab = "\t"),
-                        selected = ","),
-            tags$hr(),
-            p("Expected format: Batch, Container, Stage, Product, Measurement"),
-            p("Products should be labeled as 'TEST' and 'REF'"),
-            p("Stages should be 'B' (Beginning), 'M' (Middle), 'E' (End)")
-          ),
-          
-          box(
-            title = "Regulatory Constants", status = "info", solidHeader = TRUE, width = 6,
-            p(strong("σ_T0:"), SIGMA_T0, "(Regulatory constant)"),
-            p(strong("θ_p:"), THETA_P, "(Regulatory constant)"),
-            br(),
-            p("These constants are defined in the FDA Draft Guidance on Budesonide (September 2012)"),
-            actionButton("analyze", "Run PBE Analysis", 
-                        class = "btn-success btn-lg", icon = icon("play"))
-          )
-        ),
-        
-        fluidRow(
-          box(
-            title = "Data Preview", status = "primary", solidHeader = TRUE, width = 12,
-            DT::dataTableOutput("preview")
-          )
-        )
-      ),
-      
-      # Results Tab
-      tabItem(tabName = "results",
-        fluidRow(
-          box(
-            title = "Study Design Summary", status = "success", solidHeader = TRUE, width = 6,
-            verbatimTextOutput("study_summary")
-          ),
-          
-          box(
-            title = "Procedure Selection", status = "info", solidHeader = TRUE, width = 6,
-            verbatimTextOutput("procedure_selection")
-          )
-        ),
-        
-        fluidRow(
-          box(
-            title = "PBE Components - E Values (Point Estimates)", 
-            status = "primary", solidHeader = TRUE, width = 12,
-            DT::dataTableOutput("e_components")
-          )
-        ),
-        
-        fluidRow(
-          box(
-            title = "PBE Components - H Values (Upper Confidence Bounds)", 
-            status = "primary", solidHeader = TRUE, width = 12,
-            DT::dataTableOutput("h_components")
-          )
-        ),
-        
-        fluidRow(
-          box(
-            title = "PBE Components - U Values (Variance Terms: U = (H-E)²)", 
-            status = "primary", solidHeader = TRUE, width = 12,
-            DT::dataTableOutput("u_components")
-          )
-        ),
-        
-        fluidRow(
-          box(
-            title = "Final Bioequivalence Results", 
-            status = "warning", solidHeader = TRUE, width = 12,
-            DT::dataTableOutput("final_results")
-          )
-        )
-      ),
-      
-      # Visualizations Tab
-      tabItem(tabName = "plots",
-        fluidRow(
-          box(
-            title = "Data Distribution by Product", 
-            status = "primary", solidHeader = TRUE, width = 6,
-            plotlyOutput("dist_plot")
-          ),
-          
-          box(
-            title = "Batch Variability", 
-            status = "primary", solidHeader = TRUE, width = 6,
-            plotlyOutput("batch_plot")
-          )
-        ),
-        
-        fluidRow(
-          box(
-            title = "PBE Components Breakdown", 
-            status = "primary", solidHeader = TRUE, width = 12,
-            plotlyOutput("components_plot")
-          )
-        )
-      ),
-      
-      # Report Tab
-      tabItem(tabName = "report",
-        fluidRow(
-          box(
-            title = "Complete PBE Analysis Report", 
-            status = "success", solidHeader = TRUE, width = 12,
-            downloadButton("download_report", "Download Report", 
-                          class = "btn-primary", icon = icon("download")),
-            br(), br(),
-            verbatimTextOutput("full_report")
-          )
-        )
+    tags$hr(),
+    
+    # Analysis Button
+    actionButton("analyze", "Run PBE Analysis", 
+                class = "btn-success btn-lg", width = "100%"),
+    
+    br(), br()
+  ),
+  
+  # Main Panel with Report
+  card(
+    card_header(
+      div(
+        style = "display: flex; justify-content: space-between; align-items: center;",
+        h3("PBE Analysis Report - FDA PSG Format", style = "margin: 0;"),
+        downloadButton("download_report", "Download Report", 
+                      class = "btn-primary")
       )
-    )
+    ),
+    uiOutput("html_report")
   )
 )
 
@@ -322,50 +298,178 @@ ui <- dashboardPage(
 server <- function(input, output, session) {
   # Reactive values
   values <- reactiveValues(
-    data = NULL,
+    raw_data = NULL,      # Original uploaded data
+    data = NULL,          # Mapped and processed data
     results = NULL,
-    components = NULL
+    components = NULL,
+    show_mapping = FALSE  # Control column mapping visibility
   )
   
-  # File upload and preview
+  # File upload and column mapping setup
   observeEvent(input$file, {
     req(input$file)
     
     tryCatch({
-      values$data <- read.csv(input$file$datapath,
-                             header = input$header,
-                             sep = input$sep)
+      # Determine file type based on extension
+      file_ext <- tools::file_ext(input$file$name)
       
-      # Validate data structure
-      required_cols <- c("Batch", "Container", "Stage", "Product", "Measurement")
-      if (!all(required_cols %in% names(values$data))) {
-        showNotification("Error: Missing required columns. Expected: Batch, Container, Stage, Product, Measurement", 
-                        type = "error", duration = 10)
-        values$data <- NULL
-        return()
+      if (file_ext %in% c("xlsx", "xls")) {
+        # Read Excel file
+        values$raw_data <- read_excel(input$file$datapath, col_names = TRUE)
+      } else if (file_ext == "xpt") {
+        # Read SAS Transport file
+        values$raw_data <- read_xpt(input$file$datapath)
+      } else {
+        # Read CSV file with automatic separator detection
+        detected_sep <- detect_separator(input$file$datapath)
+        values$raw_data <- read.csv(input$file$datapath,
+                                   header = TRUE,
+                                   sep = detected_sep)
+      }
+      
+      # Get column names for mapping
+      col_names <- names(values$raw_data)
+      col_choices <- c("Select column..." = "", setNames(col_names, col_names))
+      
+      # Update column mapping dropdowns
+      updateSelectInput(session, "map_batch", choices = col_choices, 
+                       selected = ifelse("Batch" %in% col_names, "Batch", ""))
+      updateSelectInput(session, "map_container", choices = col_choices,
+                       selected = ifelse("Container" %in% col_names, "Container", ""))
+      updateSelectInput(session, "map_stage", choices = col_choices,
+                       selected = ifelse("Stage" %in% col_names, "Stage", ""))
+      updateSelectInput(session, "map_product", choices = col_choices,
+                       selected = ifelse("Product" %in% col_names, "Product", ""))
+      updateSelectInput(session, "map_measurement", choices = col_choices,
+                       selected = ifelse("Measurement" %in% col_names, "Measurement", ""))
+      
+      # Show column mapping panel
+      values$show_mapping <- TRUE
+      
+      # Clear previous mapped data
+      values$data <- NULL
+      
+      showNotification("File uploaded successfully! Please map the columns below.", type = "message")
+      
+    }, error = function(e) {
+      showNotification(paste("Error reading file:", e$message), type = "error", duration = 10)
+      values$raw_data <- NULL
+      values$show_mapping <- FALSE
+    })
+  })
+  
+  # Handle column mapping application
+  observeEvent(input$apply_mapping, {
+    req(values$raw_data)
+    
+    # Check if all mappings are selected
+    mappings <- list(
+      Batch = input$map_batch,
+      Container = input$map_container,
+      Stage = input$map_stage,
+      Product = input$map_product,
+      Measurement = input$map_measurement
+    )
+    
+    # Validate that all columns are mapped
+    empty_mappings <- sapply(mappings, function(x) is.null(x) || x == "")
+    if (any(empty_mappings)) {
+      missing_params <- names(mappings)[empty_mappings]
+      showNotification(paste("Please map all required columns. Missing:", paste(missing_params, collapse = ", ")), 
+                      type = "error", duration = 10)
+      return()
+    }
+    
+    # Check for duplicate mappings
+    selected_cols <- unlist(mappings)
+    if (length(selected_cols) != length(unique(selected_cols))) {
+      showNotification("Error: Each column can only be mapped once. Please select different columns for each parameter.", 
+                      type = "error", duration = 10)
+      return()
+    }
+    
+    tryCatch({
+      # Create mapped data frame with standardization
+      raw_product <- values$raw_data[[input$map_product]]
+      raw_stage <- values$raw_data[[input$map_stage]]
+      
+      # Standardize Product column
+      standardized_product <- toupper(as.character(raw_product))
+      standardized_product <- case_when(
+        standardized_product %in% c("TEST", "T") ~ "TEST",
+        standardized_product %in% c("REF", "REFERENCE", "R") ~ "REF",
+        TRUE ~ standardized_product
+      )
+      
+      # Standardize Stage column  
+      standardized_stage <- toupper(as.character(raw_stage))
+      standardized_stage <- case_when(
+        standardized_stage %in% c("B", "BEGINNING", "BEGIN") ~ "B",
+        standardized_stage %in% c("M", "MIDDLE", "MID") ~ "M", 
+        standardized_stage %in% c("E", "END", "ENDING") ~ "E",
+        TRUE ~ standardized_stage
+      )
+      
+      values$data <- data.frame(
+        Batch = values$raw_data[[input$map_batch]],
+        Container = values$raw_data[[input$map_container]],
+        Stage = standardized_stage,
+        Product = standardized_product,
+        Measurement = values$raw_data[[input$map_measurement]]
+      )
+      
+      # Validate mapped data
+      # Check for missing values
+      if (any(is.na(values$data))) {
+        showNotification("Warning: Data contains missing values. Please check your data.", 
+                        type = "warning", duration = 10)
       }
       
       # Validate products
       products <- unique(values$data$Product)
       if (!all(c("TEST", "REF") %in% products)) {
-        showNotification("Error: Data must contain both 'TEST' and 'REF' products", 
+        showNotification(paste("Error: Product column must contain both TEST and REF products. Found:", paste(products, collapse = ", ")), 
                         type = "error", duration = 10)
         values$data <- NULL
         return()
       }
       
-      showNotification("Data uploaded successfully!", type = "message")
+      # Validate stages
+      stages <- unique(values$data$Stage)
+      expected_stages <- c("B", "M", "E")
+      if (!all(expected_stages %in% stages)) {
+        showNotification(paste("Error: Stage column must contain B, M, E stages. Found:", paste(stages, collapse = ", ")), 
+                        type = "error", duration = 10)
+        values$data <- NULL
+        return()
+      }
+      
+      # Validate measurement column is numeric
+      if (!is.numeric(values$data$Measurement)) {
+        # Try to convert to numeric
+        values$data$Measurement <- as.numeric(values$data$Measurement)
+        if (any(is.na(values$data$Measurement))) {
+          showNotification("Error: Measurement column must contain numeric values", 
+                          type = "error", duration = 10)
+          values$data <- NULL
+          return()
+        }
+      }
+      
+      showNotification("Column mapping applied successfully! Data is ready for analysis.", type = "message")
       
     }, error = function(e) {
-      showNotification(paste("Error reading file:", e$message), type = "error", duration = 10)
+      showNotification(paste("Error applying column mapping:", e$message), type = "error", duration = 10)
       values$data <- NULL
     })
   })
   
-  output$preview <- DT::renderDataTable({
-    req(values$data)
-    DT::datatable(values$data, options = list(scrollX = TRUE, pageLength = 10))
+  # Output to control column mapping visibility
+  output$show_mapping <- reactive({
+    values$show_mapping
   })
+  outputOptions(output, "show_mapping", suspendWhenHidden = FALSE)
+  
   
   # PBE Analysis
   observeEvent(input$analyze, {
@@ -422,22 +526,50 @@ server <- function(input, output, session) {
       # Combine all components
       all_components <- c(components, ref_components, const_components)
       
-      # Final calculations
-      # Reference-scaled procedure
-      eq_ref <- all_components$ed + all_components$e1 + all_components$e2 + 
-                all_components$e3s + all_components$e4s
-      uq_ref <- all_components$ud + all_components$u1 + all_components$u2 + 
-                all_components$u3s + all_components$u4s
-      hq_ref <- eq_ref + sqrt(max(0, uq_ref))
-      bioequivalent_ref <- hq_ref <= 0
-      
-      # Constant-scaled procedure
-      eq_const <- all_components$ed + all_components$e1 + all_components$e2 + 
-                  all_components$e3c + all_components$e4c - THETA_P * SIGMA_T0^2
-      uq_const <- all_components$ud + all_components$u1 + all_components$u2 + 
-                  all_components$u3c + all_components$u4c
-      hq_const <- eq_const + sqrt(max(0, uq_const))
-      bioequivalent_const <- hq_const <= 0
+      # Handle different PSG methods
+      if (input$psg_method == "fluticasone") {
+        # Fluticasone Propionate - EXCLUDE ED and UD terms
+        # Reference-scaled procedure (without ED/UD)
+        eq_ref <- all_components$e1 + all_components$e2 + 
+                  all_components$e3s + all_components$e4s
+        uq_ref <- all_components$u1 + all_components$u2 + 
+                  all_components$u3 + all_components$u4
+        hq_ref <- eq_ref + sqrt(max(0, uq_ref))
+        bioequivalent_ref <- hq_ref <= 0
+        
+        # Constant-scaled procedure (without ED/UD)
+        eq_const <- all_components$e1 + all_components$e2 + 
+                    all_components$e3c + all_components$e4c - THETA_P * SIGMA_T0^2
+        uq_const <- all_components$u1 + all_components$u2 + 
+                    all_components$u3c + all_components$u4c
+        hq_const <- eq_const + sqrt(max(0, uq_const))
+        bioequivalent_const <- hq_const <= 0
+        
+        fluticasone_results <- list(
+          procedure_used = "Fluticasone Propionate PSG - Excludes ED/UD terms",
+          excludes_ed_ud = TRUE
+        )
+        
+      } else {
+        # Standard Budesonide PBE - INCLUDE ED and UD terms
+        # Reference-scaled procedure (with ED/UD)
+        eq_ref <- all_components$ed + all_components$e1 + all_components$e2 + 
+                  all_components$e3s + all_components$e4s
+        uq_ref <- all_components$ud + all_components$u1 + all_components$u2 + 
+                  all_components$u3 + all_components$u4
+        hq_ref <- eq_ref + sqrt(max(0, uq_ref))
+        bioequivalent_ref <- hq_ref <= 0
+        
+        # Constant-scaled procedure (with ED/UD)
+        eq_const <- all_components$ed + all_components$e1 + all_components$e2 + 
+                    all_components$e3c + all_components$e4c - THETA_P * SIGMA_T0^2
+        uq_const <- all_components$ud + all_components$u1 + all_components$u2 + 
+                    all_components$u3c + all_components$u4c
+        hq_const <- eq_const + sqrt(max(0, uq_const))
+        bioequivalent_const <- hq_const <= 0
+        
+        fluticasone_results <- NULL
+      }
       
       # Store results
       values$results <- list(
@@ -451,7 +583,9 @@ server <- function(input, output, session) {
         m = m, l_t = l_t, l_r = l_r, n_t = n_t, n_r = n_r,
         use_reference_scaled = use_reference_scaled,
         eq_ref = eq_ref, uq_ref = uq_ref, hq_ref = hq_ref, bioequivalent_ref = bioequivalent_ref,
-        eq_const = eq_const, uq_const = uq_const, hq_const = hq_const, bioequivalent_const = bioequivalent_const
+        eq_const = eq_const, uq_const = uq_const, hq_const = hq_const, bioequivalent_const = bioequivalent_const,
+        psg_method = input$psg_method,
+        fluticasone_results = fluticasone_results
       )
       
       values$components <- all_components
@@ -465,394 +599,107 @@ server <- function(input, output, session) {
     })
   })
   
-  # Study Summary Output
-  output$study_summary <- renderText({
-    req(values$results)
+  # HTML Report Generation
+  output$html_report <- renderUI({
+    req(values$results, values$components, values$data)
     
-    paste(
-      "STUDY DESIGN PARAMETERS",
-      "========================",
-      paste("Number of life stages (m):", values$results$m),
-      paste("Test batches (l_T):", values$results$l_t),
-      paste("Reference batches (l_R):", values$results$l_r),
-      paste("Containers per batch (n):", values$results$n_t),
-      "",
-      "BASIC STATISTICS",
-      "================",
-      paste("Test mean (μ_T):", sprintf("%.8f", values$results$test_mean)),
-      paste("Reference mean (μ_R):", sprintf("%.8f", values$results$ref_mean)),
-      paste("Delta (Δ = μ_T - μ_R):", sprintf("%.8f", values$results$delta)),
-      paste("Delta squared (Δ²):", sprintf("%.8f", values$results$delta^2)),
-      "",
-      "VARIANCE COMPONENTS",
-      "===================",
-      paste("σ_T:", sprintf("%.8f", values$results$sigma_t)),
-      paste("σ_R:", sprintf("%.8f", values$results$sigma_r)),
-      paste("MSB_T:", sprintf("%.8f", values$results$msb_t)),
-      paste("MSW_T:", sprintf("%.8f", values$results$msw_t)),
-      paste("MSB_R:", sprintf("%.8f", values$results$msb_r)),
-      paste("MSW_R:", sprintf("%.8f", values$results$msw_r)),
-      sep = "\n"
-    )
-  })
-  
-  # Procedure Selection Output
-  output$procedure_selection <- renderText({
-    req(values$results)
+    # Create temporary file for rendered HTML
+    temp_rmd <- tempfile(fileext = ".Rmd")
+    temp_html <- tempfile(fileext = ".html")
     
-    paste(
-      "PROCEDURE SELECTION",
-      "===================",
-      paste("σ_R (", sprintf("%.6f", values$results$sigma_r), ")", 
-            ifelse(values$results$use_reference_scaled, " >", " ≤"), 
-            " σ_T0 (", SIGMA_T0, ")", sep = ""),
-      paste("→ Use", ifelse(values$results$use_reference_scaled, 
-                           "Reference-scaled", "Constant-scaled"), "procedure"),
-      "",
-      "REGULATORY CONSTANTS",
-      "====================",
-      paste("σ_T0 =", SIGMA_T0, "(Regulatory constant)"),
-      paste("θ_p =", THETA_P, "(Regulatory constant)"),
-      sep = "\n"
-    )
-  })
-  
-  # E Components Table
-  output$e_components <- DT::renderDataTable({
-    req(values$components)
+    # Copy template to temp location
+    template_path <- file.path("PBE_SHINY", "report_template.Rmd")
+    if (!file.exists(template_path)) {
+      template_path <- "report_template.Rmd"  # fallback
+    }
+    file.copy(template_path, temp_rmd)
     
-    e_data <- data.frame(
-      Component = c("ED", "E1", "E2", "E3s", "E4s", "E3c", "E4c"),
-      Description = c(
-        "Mean Difference (Δ²)",
-        "Test Between-Container Variance",
-        "Test Within-Container Variance", 
-        "Reference Between-Container (Scaled)",
-        "Reference Within-Container (Scaled)",
-        "Reference Between-Container (Constant)",
-        "Reference Within-Container (Constant)"
-      ),
-      Value = c(
-        sprintf("%.8f", values$components$ed),
-        sprintf("%.8f", values$components$e1),
-        sprintf("%.8f", values$components$e2),
-        sprintf("%.8f", values$components$e3s),
-        sprintf("%.8f", values$components$e4s),
-        sprintf("%.8f", values$components$e3c),
-        sprintf("%.8f", values$components$e4c)
-      ),
-      stringsAsFactors = FALSE
-    )
-    
-    DT::datatable(e_data, options = list(dom = 't', pageLength = 20)) %>%
-      formatStyle(columns = 1:3, fontSize = '12px')
-  })
-  
-  # H Components Table
-  output$h_components <- DT::renderDataTable({
-    req(values$components)
-    
-    h_data <- data.frame(
-      Component = c("HD", "H1", "H2", "H3s", "H4s", "H3c", "H4c"),
-      Description = c(
-        "Mean Difference Upper Bound",
-        "Test Between-Container Upper Bound",
-        "Test Within-Container Upper Bound",
-        "Reference Between-Container Upper Bound (Scaled)",
-        "Reference Within-Container Upper Bound (Scaled)",
-        "Reference Between-Container Upper Bound (Constant)",
-        "Reference Within-Container Upper Bound (Constant)"
-      ),
-      Value = c(
-        sprintf("%.8f", values$components$hd),
-        sprintf("%.8f", values$components$h1),
-        sprintf("%.8f", values$components$h2),
-        sprintf("%.8f", values$components$h3s),
-        sprintf("%.8f", values$components$h4s),
-        sprintf("%.8f", values$components$h3c),
-        sprintf("%.8f", values$components$h4c)
-      ),
-      stringsAsFactors = FALSE
-    )
-    
-    DT::datatable(h_data, options = list(dom = 't', pageLength = 20)) %>%
-      formatStyle(columns = 1:3, fontSize = '12px')
-  })
-  
-  # U Components Table
-  output$u_components <- DT::renderDataTable({
-    req(values$components)
-    
-    u_data <- data.frame(
-      Component = c("UD", "U1", "U2", "U3s", "U4s", "U3c", "U4c"),
-      Description = c(
-        "Mean Difference Variance Term",
-        "Test Between-Container Variance Term",
-        "Test Within-Container Variance Term",
-        "Reference Between-Container Variance Term (Scaled)",
-        "Reference Within-Container Variance Term (Scaled)",
-        "Reference Between-Container Variance Term (Constant)",
-        "Reference Within-Container Variance Term (Constant)"
-      ),
-      Value = c(
-        sprintf("%.8f", values$components$ud),
-        sprintf("%.8f", values$components$u1),
-        sprintf("%.8f", values$components$u2),
-        sprintf("%.8f", values$components$u3s),
-        sprintf("%.8f", values$components$u4s),
-        sprintf("%.8f", values$components$u3c),
-        sprintf("%.8f", values$components$u4c)
-      ),
-      Formula = rep("U = (H - E)²", 7),
-      stringsAsFactors = FALSE
-    )
-    
-    DT::datatable(u_data, options = list(dom = 't', pageLength = 20)) %>%
-      formatStyle(columns = 1:4, fontSize = '12px') %>%
-      formatStyle("Formula", backgroundColor = "#e8f5e8")
-  })
-  
-  # Final Results Table
-  output$final_results <- DT::renderDataTable({
-    req(values$results)
-    
-    final_data <- data.frame(
-      Procedure = c("Reference-Scaled", "Reference-Scaled", "Reference-Scaled", 
-                   "Constant-Scaled", "Constant-Scaled", "Constant-Scaled"),
-      Metric = c("Point Estimate (Eq)", "Variance Term (Uq)", "Upper Confidence Bound (Hη)",
-                "Point Estimate (Eq)", "Variance Term (Uq)", "Upper Confidence Bound (Hη)"),
-      Value = c(
-        sprintf("%.8f", values$results$eq_ref),
-        sprintf("%.8f", values$results$uq_ref),
-        sprintf("%.8f", values$results$hq_ref),
-        sprintf("%.8f", values$results$eq_const),
-        sprintf("%.8f", values$results$uq_const),
-        sprintf("%.8f", values$results$hq_const)
-      ),
-      Decision = c(
-        ifelse(values$results$bioequivalent_ref, "BIOEQUIVALENT", "NOT BIOEQUIVALENT"),
-        "",
-        ifelse(values$results$hq_ref <= 0, "Hη ≤ 0 ✓", "Hη > 0 ✗"),
-        ifelse(values$results$bioequivalent_const, "BIOEQUIVALENT", "NOT BIOEQUIVALENT"),
-        "",
-        ifelse(values$results$hq_const <= 0, "Hη ≤ 0 ✓", "Hη > 0 ✗")
-      ),
-      stringsAsFactors = FALSE
-    )
-    
-    DT::datatable(final_data, options = list(dom = 't', pageLength = 10)) %>%
-      formatStyle(columns = 1:4, fontSize = '12px') %>%
-      formatStyle("Decision", 
-                 backgroundColor = styleEqual(c("BIOEQUIVALENT", "Hη ≤ 0 ✓"), 
-                                            c("#d4edda", "#d4edda")))
-  })
-  
-  # Visualization outputs
-  output$dist_plot <- renderPlotly({
-    req(values$data)
-    
-    p <- ggplot(values$data, aes(x = Measurement, fill = Product)) +
-      geom_histogram(alpha = 0.7, bins = 20, position = "identity") +
-      scale_fill_manual(values = c("TEST" = "skyblue", "REF" = "lightcoral")) +
-      labs(title = "Distribution of Measurements by Product",
-           x = "Measurement Value", y = "Count") +
-      theme_minimal() +
-      theme(legend.position = "top")
-    
-    ggplotly(p)
-  })
-  
-  output$batch_plot <- renderPlotly({
-    req(values$data)
-    
-    p <- ggplot(values$data, aes(x = factor(Batch), y = Measurement, fill = Product)) +
-      geom_boxplot() +
-      scale_fill_manual(values = c("TEST" = "skyblue", "REF" = "lightcoral")) +
-      labs(title = "Batch-to-Batch Variability",
-           x = "Batch", y = "Measurement") +
-      theme_minimal() +
-      theme(legend.position = "top")
-    
-    ggplotly(p)
-  })
-  
-  output$components_plot <- renderPlotly({
-    req(values$components, values$results)
-    
-    # Create components data
-    comp_data <- data.frame(
-      Component = c("ED", "E1", "E2", "E3s", "E4s"),
-      Value = c(values$components$ed, values$components$e1, values$components$e2,
-               values$components$e3s, values$components$e4s),
-      Type = "E Components"
-    )
-    
-    p <- ggplot(comp_data, aes(x = Component, y = Value, fill = Value < 0)) +
-      geom_col(alpha = 0.8) +
-      geom_text(aes(label = sprintf("%.4f", Value)), 
-               vjust = ifelse(comp_data$Value > 0, -0.5, 1.5)) +
-      scale_fill_manual(values = c("TRUE" = "red", "FALSE" = "blue")) +
-      labs(title = "PBE E Components (Point Estimates)",
-           x = "Component", y = "Value") +
-      geom_hline(yintercept = 0, color = "black", alpha = 0.3) +
-      theme_minimal() +
-      theme(legend.position = "none")
-    
-    ggplotly(p)
-  })
-  
-  # Full Report Output
-  output$full_report <- renderText({
-    req(values$results, values$components)
-    
-    paste(
-      "POPULATION BIOEQUIVALENCE (PBE) ANALYSIS REPORT",
-      "=" %>% rep(50) %>% paste(collapse = ""),
-      paste("Analysis Date:", Sys.Date()),
-      paste("FDA Reference: Draft Guidance on Budesonide (September 2012)"),
-      "",
-      "STUDY DESIGN",
-      "=" %>% rep(20) %>% paste(collapse = ""),
-      paste("• Parallel design with Test and Reference products"),
-      paste("• Life stages:", values$results$m, "(Beginning, Middle, End)"),
-      paste("• Test batches:", values$results$l_t),
-      paste("• Reference batches:", values$results$l_r),
-      paste("• Containers per batch:", values$results$n_t),
-      paste("• Total measurements:", nrow(values$data)),
-      "",
-      "BASIC STATISTICS",
-      "=" %>% rep(20) %>% paste(collapse = ""),
-      paste("Test mean (μ_T):", sprintf("%.8f", values$results$test_mean)),
-      paste("Reference mean (μ_R):", sprintf("%.8f", values$results$ref_mean)),
-      paste("Delta (Δ):", sprintf("%.8f", values$results$delta)),
-      paste("Delta squared (Δ²):", sprintf("%.8f", values$results$delta^2)),
-      "",
-      "VARIANCE ANALYSIS",
-      "=" %>% rep(20) %>% paste(collapse = ""),
-      paste("σ_T:", sprintf("%.8f", values$results$sigma_t)),
-      paste("σ_R:", sprintf("%.8f", values$results$sigma_r)),
-      paste("MSB_T:", sprintf("%.8f", values$results$msb_t)),
-      paste("MSW_T:", sprintf("%.8f", values$results$msw_t)),
-      paste("MSB_R:", sprintf("%.8f", values$results$msb_r)),
-      paste("MSW_R:", sprintf("%.8f", values$results$msw_r)),
-      "",
-      "PROCEDURE SELECTION",
-      "=" %>% rep(20) %>% paste(collapse = ""),
-      paste("σ_R (", sprintf("%.6f", values$results$sigma_r), ")", 
-            ifelse(values$results$use_reference_scaled, " >", " ≤"), 
-            " σ_T0 (", SIGMA_T0, ")", sep = ""),
-      paste("Selected procedure:", ifelse(values$results$use_reference_scaled, 
-                                        "Reference-scaled", "Constant-scaled")),
-      "",
-      "PBE COMPONENTS (E, H, U = (H-E)²)",
-      "=" %>% rep(35) %>% paste(collapse = ""),
-      paste("ED =", sprintf("%.8f", values$components$ed)),
-      paste("E1 =", sprintf("%.8f", values$components$e1)),
-      paste("E2 =", sprintf("%.8f", values$components$e2)),
-      paste("E3s =", sprintf("%.8f", values$components$e3s)),
-      paste("E4s =", sprintf("%.8f", values$components$e4s)),
-      "",
-      paste("H1 =", sprintf("%.8f", values$components$h1)),
-      paste("H2 =", sprintf("%.8f", values$components$h2)),
-      paste("H3s =", sprintf("%.8f", values$components$h3s)),
-      paste("H4s =", sprintf("%.8f", values$components$h4s)),
-      "",
-      paste("U1 =", sprintf("%.8f", values$components$u1)),
-      paste("U2 =", sprintf("%.8f", values$components$u2)),
-      paste("U3s =", sprintf("%.8f", values$components$u3s)),
-      paste("U4s =", sprintf("%.8f", values$components$u4s)),
-      "",
-      "FINAL RESULTS",
-      "=" %>% rep(20) %>% paste(collapse = ""),
-      "Reference-Scaled Procedure:",
-      paste("  Point Estimate (Eq):", sprintf("%.8f", values$results$eq_ref)),
-      paste("  Variance Term (Uq):", sprintf("%.8f", values$results$uq_ref)),
-      paste("  Upper Confidence Bound (Hη):", sprintf("%.8f", values$results$hq_ref)),
-      paste("  Bioequivalence Decision:", 
-            ifelse(values$results$bioequivalent_ref, "BIOEQUIVALENT", "NOT BIOEQUIVALENT")),
-      "",
-      "Constant-Scaled Procedure:",
-      paste("  Point Estimate (Eq):", sprintf("%.8f", values$results$eq_const)),
-      paste("  Variance Term (Uq):", sprintf("%.8f", values$results$uq_const)),
-      paste("  Upper Confidence Bound (Hη):", sprintf("%.8f", values$results$hq_const)),
-      paste("  Bioequivalence Decision:", 
-            ifelse(values$results$bioequivalent_const, "BIOEQUIVALENT", "NOT BIOEQUIVALENT")),
-      "",
-      "CONCLUSION",
-      "=" %>% rep(15) %>% paste(collapse = ""),
-      paste("Primary Analysis:", ifelse(values$results$use_reference_scaled, 
-                                      "Reference-scaled", "Constant-scaled"), "procedure"),
-      paste("Final Decision:", 
-            ifelse(values$results$use_reference_scaled, 
-                   ifelse(values$results$bioequivalent_ref, "BIOEQUIVALENT", "NOT BIOEQUIVALENT"),
-                   ifelse(values$results$bioequivalent_const, "BIOEQUIVALENT", "NOT BIOEQUIVALENT"))),
-      "",
-      "METHODOLOGY NOTES",
-      "=" %>% rep(20) %>% paste(collapse = ""),
-      "• Applied corrected U component formula: U = (H - E)²",
-      "• Chi-square corrections: Lower tail for H1,H2; Upper tail for H3s,H4s",
-      "• Implementation follows FDA Draft Guidance on Budesonide exactly",
-      "• All calculations validated against FDA reference values",
-      sep = "\n"
-    )
-  })
-  
-  # Download Report
-  output$download_report <- downloadHandler(
-    filename = function() {
-      paste("PBE_Analysis_Report_", Sys.Date(), ".txt", sep = "")
-    },
-    content = function(file) {
-      req(values$results, values$components)
-      
-      report_content <- paste(
-        "POPULATION BIOEQUIVALENCE (PBE) ANALYSIS REPORT",
-        "=" %>% rep(50) %>% paste(collapse = ""),
-        paste("Analysis Date:", Sys.Date()),
-        paste("FDA Reference: Draft Guidance on Budesonide (September 2012)"),
-        "",
-        "STUDY DESIGN",
-        "=" %>% rep(20) %>% paste(collapse = ""),
-        paste("• Parallel design with Test and Reference products"),
-        paste("• Life stages:", values$results$m, "(Beginning, Middle, End)"),
-        paste("• Test batches:", values$results$l_t),
-        paste("• Reference batches:", values$results$l_r),
-        paste("• Containers per batch:", values$results$n_t),
-        paste("• Total measurements:", nrow(values$data)),
-        "",
-        "BASIC STATISTICS",
-        "=" %>% rep(20) %>% paste(collapse = ""),
-        paste("Test mean (μ_T):", sprintf("%.8f", values$results$test_mean)),
-        paste("Reference mean (μ_R):", sprintf("%.8f", values$results$ref_mean)),
-        paste("Delta (Δ):", sprintf("%.8f", values$results$delta)),
-        paste("Delta squared (Δ²):", sprintf("%.8f", values$results$delta^2)),
-        "",
-        "VARIANCE ANALYSIS",
-        "=" %>% rep(20) %>% paste(collapse = ""),
-        paste("σ_T:", sprintf("%.8f", values$results$sigma_t)),
-        paste("σ_R:", sprintf("%.8f", values$results$sigma_r)),
-        paste("MSB_T:", sprintf("%.8f", values$results$msb_t)),
-        paste("MSW_T:", sprintf("%.8f", values$results$msw_t)),
-        paste("MSB_R:", sprintf("%.8f", values$results$msb_r)),
-        paste("MSW_R:", sprintf("%.8f", values$results$msw_r)),
-        "",
-        "FINAL RESULTS",
-        "=" %>% rep(20) %>% paste(collapse = ""),
-        "Reference-Scaled Procedure:",
-        paste("  Point Estimate (Eq):", sprintf("%.8f", values$results$eq_ref)),
-        paste("  Upper Confidence Bound (Hη):", sprintf("%.8f", values$results$hq_ref)),
-        paste("  Bioequivalence Decision:", 
-              ifelse(values$results$bioequivalent_ref, "BIOEQUIVALENT", "NOT BIOEQUIVALENT")),
-        "",
-        "Constant-Scaled Procedure:",
-        paste("  Point Estimate (Eq):", sprintf("%.8f", values$results$eq_const)),
-        paste("  Upper Confidence Bound (Hη):", sprintf("%.8f", values$results$hq_const)),
-        paste("  Bioequivalence Decision:", 
-              ifelse(values$results$bioequivalent_const, "BIOEQUIVALENT", "NOT BIOEQUIVALENT")),
-        sep = "\n"
+    tryCatch({
+      # Render the R Markdown with parameters
+      rmarkdown::render(
+        temp_rmd,
+        output_file = temp_html,
+        params = list(
+          results = values$results,
+          components = values$components,
+          data_summary = values$data
+        ),
+        quiet = TRUE
       )
       
-      writeLines(report_content, file)
+      # Read the rendered HTML
+      html_content <- readLines(temp_html, warn = FALSE)
+      html_string <- paste(html_content, collapse = "\n")
+      
+      # Clean up temp files
+      unlink(c(temp_rmd, temp_html))
+      
+      # Return HTML content
+      HTML(html_string)
+      
+    }, error = function(e) {
+      # Fallback in case of rendering error
+      div(
+        h3("Report Generation Error"),
+        p("There was an error generating the report. Please ensure all calculations have completed."),
+        p(paste("Error:", e$message))
+      )
+    })
+  })
+  
+  
+  # Download Report as PDF
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste("PBE_Analysis_Report_", Sys.Date(), ".pdf", sep = "")
+    },
+    content = function(file) {
+      req(values$results, values$components, values$data)
+      
+      # Create temporary file for R Markdown
+      temp_rmd <- tempfile(fileext = ".Rmd")
+      temp_pdf <- tempfile(fileext = ".pdf")
+      
+      # Copy template to temp location
+      template_path <- file.path("PBE_SHINY", "report_template.Rmd")
+      if (!file.exists(template_path)) {
+        template_path <- "report_template.Rmd"  # fallback
+      }
+      file.copy(template_path, temp_rmd)
+      
+      tryCatch({
+        # Render the R Markdown to PDF with parameters
+        rmarkdown::render(
+          temp_rmd,
+          output_format = "pdf_document",
+          output_file = temp_pdf,
+          params = list(
+            results = values$results,
+            components = values$components,
+            data_summary = values$data
+          ),
+          quiet = TRUE
+        )
+        
+        # Copy the generated PDF to the download file
+        file.copy(temp_pdf, file)
+        
+        # Clean up temp files
+        unlink(c(temp_rmd, temp_pdf))
+        
+      }, error = function(e) {
+        # Fallback: create a simple text file if PDF generation fails
+        report_content <- paste(
+          "PBE Analysis Report",
+          paste("Generated:", Sys.time()),
+          paste("PSG Method:", values$results$psg_method),
+          "",
+          "PDF generation failed. Please check that you have LaTeX installed.",
+          paste("Error:", e$message),
+          sep = "\n"
+        )
+        writeLines(report_content, file)
+      })
     }
   )
 }
