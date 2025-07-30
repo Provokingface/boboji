@@ -243,7 +243,7 @@ ui <- page_sidebar(
       
       div(style = "display: flex; align-items: center; margin-bottom: 5px;",
           "Stage:",
-          tags$span(title = "Life stages - accepts B/Beginning, M/Middle, E/End",
+          tags$span(title = "Life stages - accepts B/Beginning, M/Middle, E/End (at least one required)",
                    style = "margin-left: 8px; color: #007bff; cursor: default; user-select: none;",
                    HTML("&#9432;"))
       ),
@@ -434,11 +434,11 @@ server <- function(input, output, session) {
         return()
       }
       
-      # Validate stages
+      # Validate stages - just check that there's at least one stage
       stages <- unique(values$data$Stage)
-      expected_stages <- c("B", "M", "E")
-      if (!all(expected_stages %in% stages)) {
-        showNotification(paste("Error: Stage column must contain B, M, E stages. Found:", paste(stages, collapse = ", ")), 
+      valid_stages <- c("B", "M", "E")
+      if (!any(stages %in% valid_stages)) {
+        showNotification(paste("Error: Stage column must contain at least one valid stage (B, M, or E). Found:", paste(stages, collapse = ", ")), 
                         type = "error", duration = 10)
         values$data <- NULL
         return()
