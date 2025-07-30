@@ -437,8 +437,14 @@ server <- function(input, output, session) {
         if (input$single_stage) {
           # Single-stage study - assign default single stage
           standardized_stage <- rep("S", nrow(values$raw_data))  # "S" for Single stage
+          showNotification("Single-stage study detected. Assigning default stage 'S'.", type = "message", duration = 3)
         } else {
           # Multi-stage study - use mapped Stage column
+          if (is.null(input$map_stage) || input$map_stage == "") {
+            showNotification("Error: Stage column must be mapped for multi-stage studies.", type = "error", duration = 10)
+            values$data <- NULL
+            return()
+          }
           raw_stage <- values$raw_data[[input$map_stage]]
           standardized_stage <- toupper(as.character(raw_stage))
           standardized_stage <- case_when(
@@ -473,14 +479,26 @@ server <- function(input, output, session) {
           return()
         }
         
-        # Validate stages - just check that there's at least one stage
+        # Validate stages based on study type
         stages <- unique(values$data$Stage)
-        valid_stages <- c("B", "M", "E")
-        if (!any(stages %in% valid_stages)) {
-          showNotification(paste("Error: Stage column must contain at least one valid stage (B, M, or E). Found:", paste(stages, collapse = ", ")), 
-                          type = "error", duration = 10)
-          values$data <- NULL
-          return()
+        if (input$single_stage) {
+          # For single-stage studies, accept "S" (assigned automatically)
+          valid_stages <- c("S")
+          if (!all(stages %in% valid_stages)) {
+            showNotification("Error: Single-stage study validation failed. Please contact support.", 
+                            type = "error", duration = 10)
+            values$data <- NULL
+            return()
+          }
+        } else {
+          # For multi-stage studies, require at least one valid stage (B, M, E)
+          valid_stages <- c("B", "M", "E")
+          if (!any(stages %in% valid_stages)) {
+            showNotification(paste("Error: Stage column must contain at least one valid stage (B, M, or E). Found:", paste(stages, collapse = ", ")), 
+                            type = "error", duration = 10)
+            values$data <- NULL
+            return()
+          }
         }
         
         # Validate measurement column is numeric
