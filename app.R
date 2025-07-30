@@ -84,12 +84,12 @@ calculate_pbe_components <- function(delta, msb_t, msw_t, msb_r, msw_r, n_t, l_t
   components$ed <- ed
   
   # HD Component (t-distribution) - Fixed formula based on FDA PSG page 8
-  # The FDA formula shows: HD = (Δ + t_α/2,df × √(variance))^2
+  # The FDA formula shows: HD = (|Δ| + t_{1-α,df} × √(variance))^2
   # where variance = MSB_T/(n_T × l_T × m) + MSB_R/(n_R × l_R × m)
   # and df = (n_T × l_T - 1) + (n_R × l_R - 1)
   df_pooled <- (l_t * n_t - 1) + (l_r * n_r - 1)
-  t_critical <- qt(1 - alpha, df_pooled)
-  # For budesonide example: df = (10×3-1) + (10×3-1) = 58, α = 0.05
+  t_critical <- qt(1 - alpha, df_pooled)  # One-tailed test: 1-α = 0.95
+  # For budesonide example: df = (10×3-1) + (10×3-1) = 58, α = 0.05, so t_{0.95,58}
   hd_variance <- msb_t/(n_t * l_t * m) + msb_r/(n_r * l_r * m)
   hd <- (abs(delta) + t_critical * sqrt(hd_variance))^2
   ud <- (hd - ed)^2  # CORRECTED: U = (H-E)²
@@ -265,10 +265,7 @@ ui <- page_sidebar(
       ),
       selectInput("map_measurement", label = NULL, choices = NULL, width = "100%"),
       
-      br(),
-      actionButton("apply_mapping", "Apply Mapping", 
-                  class = "btn-primary btn-sm", width = "100%"),
-      br(), br()
+      br()
     ),
     
     tags$hr(),
@@ -358,111 +355,6 @@ server <- function(input, output, session) {
     })
   })
   
-  # Handle column mapping application
-  observeEvent(input$apply_mapping, {
-    req(values$raw_data)
-    
-    # Check if all mappings are selected
-    mappings <- list(
-      Batch = input$map_batch,
-      Container = input$map_container,
-      Stage = input$map_stage,
-      Product = input$map_product,
-      Measurement = input$map_measurement
-    )
-    
-    # Validate that all columns are mapped
-    empty_mappings <- sapply(mappings, function(x) is.null(x) || x == "")
-    if (any(empty_mappings)) {
-      missing_params <- names(mappings)[empty_mappings]
-      showNotification(paste("Please map all required columns. Missing:", paste(missing_params, collapse = ", ")), 
-                      type = "error", duration = 10)
-      return()
-    }
-    
-    # Check for duplicate mappings
-    selected_cols <- unlist(mappings)
-    if (length(selected_cols) != length(unique(selected_cols))) {
-      showNotification("Error: Each column can only be mapped once. Please select different columns for each parameter.", 
-                      type = "error", duration = 10)
-      return()
-    }
-    
-    tryCatch({
-      # Create mapped data frame with standardization
-      raw_product <- values$raw_data[[input$map_product]]
-      raw_stage <- values$raw_data[[input$map_stage]]
-      
-      # Standardize Product column
-      standardized_product <- toupper(as.character(raw_product))
-      standardized_product <- case_when(
-        standardized_product %in% c("TEST", "T") ~ "TEST",
-        standardized_product %in% c("REF", "REFERENCE", "R") ~ "REF",
-        TRUE ~ standardized_product
-      )
-      
-      # Standardize Stage column  
-      standardized_stage <- toupper(as.character(raw_stage))
-      standardized_stage <- case_when(
-        standardized_stage %in% c("B", "BEGINNING", "BEGIN") ~ "B",
-        standardized_stage %in% c("M", "MIDDLE", "MID") ~ "M", 
-        standardized_stage %in% c("E", "END", "ENDING") ~ "E",
-        TRUE ~ standardized_stage
-      )
-      
-      values$data <- data.frame(
-        Batch = values$raw_data[[input$map_batch]],
-        Container = values$raw_data[[input$map_container]],
-        Stage = standardized_stage,
-        Product = standardized_product,
-        Measurement = values$raw_data[[input$map_measurement]]
-      )
-      
-      # Validate mapped data
-      # Check for missing values
-      if (any(is.na(values$data))) {
-        showNotification("Warning: Data contains missing values. Please check your data.", 
-                        type = "warning", duration = 10)
-      }
-      
-      # Validate products
-      products <- unique(values$data$Product)
-      if (!all(c("TEST", "REF") %in% products)) {
-        showNotification(paste("Error: Product column must contain both TEST and REF products. Found:", paste(products, collapse = ", ")), 
-                        type = "error", duration = 10)
-        values$data <- NULL
-        return()
-      }
-      
-      # Validate stages - just check that there's at least one stage
-      stages <- unique(values$data$Stage)
-      valid_stages <- c("B", "M", "E")
-      if (!any(stages %in% valid_stages)) {
-        showNotification(paste("Error: Stage column must contain at least one valid stage (B, M, or E). Found:", paste(stages, collapse = ", ")), 
-                        type = "error", duration = 10)
-        values$data <- NULL
-        return()
-      }
-      
-      # Validate measurement column is numeric
-      if (!is.numeric(values$data$Measurement)) {
-        # Try to convert to numeric
-        values$data$Measurement <- as.numeric(values$data$Measurement)
-        if (any(is.na(values$data$Measurement))) {
-          showNotification("Error: Measurement column must contain numeric values", 
-                          type = "error", duration = 10)
-          values$data <- NULL
-          return()
-        }
-      }
-      
-      showNotification("Column mapping applied successfully! Data is ready for analysis.", type = "message")
-      
-    }, error = function(e) {
-      showNotification(paste("Error applying column mapping:", e$message), type = "error", duration = 10)
-      values$data <- NULL
-    })
-  })
   
   # Output to control column mapping visibility
   output$show_mapping <- reactive({
@@ -473,6 +365,110 @@ server <- function(input, output, session) {
   
   # PBE Analysis
   observeEvent(input$analyze, {
+    # First, handle column mapping if raw data exists but mapped data doesn't
+    if (!is.null(values$raw_data) && is.null(values$data)) {
+      # Check if all mappings are selected
+      mappings <- list(
+        Batch = input$map_batch,
+        Container = input$map_container,
+        Stage = input$map_stage,
+        Product = input$map_product,
+        Measurement = input$map_measurement
+      )
+      
+      # Validate that all columns are mapped
+      empty_mappings <- sapply(mappings, function(x) is.null(x) || x == "")
+      if (any(empty_mappings)) {
+        missing_params <- names(mappings)[empty_mappings]
+        showNotification(paste("Please map all required columns. Missing:", paste(missing_params, collapse = ", ")), 
+                        type = "error", duration = 10)
+        return()
+      }
+      
+      # Check for duplicate mappings
+      selected_cols <- unlist(mappings)
+      if (length(selected_cols) != length(unique(selected_cols))) {
+        showNotification("Error: Each column can only be mapped once. Please select different columns for each parameter.", 
+                        type = "error", duration = 10)
+        return()
+      }
+      
+      tryCatch({
+        # Create mapped data frame with standardization
+        raw_product <- values$raw_data[[input$map_product]]
+        raw_stage <- values$raw_data[[input$map_stage]]
+        
+        # Standardize Product column
+        standardized_product <- toupper(as.character(raw_product))
+        standardized_product <- case_when(
+          standardized_product %in% c("TEST", "T") ~ "TEST",
+          standardized_product %in% c("REF", "REFERENCE", "R") ~ "REF",
+          TRUE ~ standardized_product
+        )
+        
+        # Standardize Stage column  
+        standardized_stage <- toupper(as.character(raw_stage))
+        standardized_stage <- case_when(
+          standardized_stage %in% c("B", "BEGINNING", "BEGIN") ~ "B",
+          standardized_stage %in% c("M", "MIDDLE", "MID") ~ "M", 
+          standardized_stage %in% c("E", "END", "ENDING") ~ "E",
+          TRUE ~ standardized_stage
+        )
+        
+        values$data <- data.frame(
+          Batch = values$raw_data[[input$map_batch]],
+          Container = values$raw_data[[input$map_container]],
+          Stage = standardized_stage,
+          Product = standardized_product,
+          Measurement = values$raw_data[[input$map_measurement]]
+        )
+        
+        # Validate mapped data
+        # Check for missing values
+        if (any(is.na(values$data))) {
+          showNotification("Warning: Data contains missing values. Please check your data.", 
+                          type = "warning", duration = 10)
+        }
+        
+        # Validate products
+        products <- unique(values$data$Product)
+        if (!all(c("TEST", "REF") %in% products)) {
+          showNotification(paste("Error: Product column must contain both TEST and REF products. Found:", paste(products, collapse = ", ")), 
+                          type = "error", duration = 10)
+          values$data <- NULL
+          return()
+        }
+        
+        # Validate stages - just check that there's at least one stage
+        stages <- unique(values$data$Stage)
+        valid_stages <- c("B", "M", "E")
+        if (!any(stages %in% valid_stages)) {
+          showNotification(paste("Error: Stage column must contain at least one valid stage (B, M, or E). Found:", paste(stages, collapse = ", ")), 
+                          type = "error", duration = 10)
+          values$data <- NULL
+          return()
+        }
+        
+        # Validate measurement column is numeric
+        if (!is.numeric(values$data$Measurement)) {
+          # Try to convert to numeric
+          values$data$Measurement <- as.numeric(values$data$Measurement)
+          if (any(is.na(values$data$Measurement))) {
+            showNotification("Error: Measurement column must contain numeric values", 
+                            type = "error", duration = 10)
+            values$data <- NULL
+            return()
+          }
+        }
+        
+      }, error = function(e) {
+        showNotification(paste("Error applying column mapping:", e$message), type = "error", duration = 10)
+        values$data <- NULL
+        return()
+      })
+    }
+    
+    # Now proceed with analysis
     req(values$data)
     
     tryCatch({
@@ -480,10 +476,16 @@ server <- function(input, output, session) {
       test_df <- filter(values$data, Product == 'TEST')
       ref_df <- filter(values$data, Product == 'REF')
       
-      # Basic statistics
+      # Basic statistics - PBE analysis uses arithmetic means for delta calculation
       test_mean <- mean(test_df$Measurement)
       ref_mean <- mean(ref_df$Measurement)
       delta <- test_mean - ref_mean
+      
+      # Calculate geometric means properly
+      test_log_mean <- mean(log(test_df$Measurement))
+      ref_log_mean <- mean(log(ref_df$Measurement))
+      test_geomean <- exp(test_log_mean)
+      ref_geomean <- exp(ref_log_mean)
       
       # Study design parameters
       m <- length(unique(values$data$Stage))
@@ -492,7 +494,7 @@ server <- function(input, output, session) {
       n_t <- length(unique(test_df$Container)) / l_t
       n_r <- length(unique(ref_df$Container)) / l_r
       
-      # Calculate MSB and MSW
+      # Calculate MSB and MSW on original (raw) measurement data
       test_results <- calculate_msb_msw(test_df, m)
       ref_results <- calculate_msb_msw(ref_df, m)
       
@@ -575,6 +577,10 @@ server <- function(input, output, session) {
       values$results <- list(
         test_mean = test_mean,
         ref_mean = ref_mean,
+        test_log_mean = test_log_mean,
+        ref_log_mean = ref_log_mean,
+        test_geomean = test_geomean,
+        ref_geomean = ref_geomean,
         delta = delta,
         sigma_t = sigma_t,
         sigma_r = sigma_r,
@@ -809,17 +815,17 @@ server <- function(input, output, session) {
               "Constant-scaled Procedure"
             ),
             `Geometric Mean Test` = c(
-              sprintf("%.6f", exp(results$test_mean)),
+              sprintf("%.6f", results$test_geomean),
               sprintf("%.9f", results$eq_ref),
               sprintf("%.9f", results$eq_const)
             ),
             `Geometric Mean Reference` = c(
-              sprintf("%.6f", exp(results$ref_mean)),
+              sprintf("%.6f", results$ref_geomean),
               sprintf("%.9f", results$hq_ref),
               sprintf("%.9f", results$hq_const)
             ),
             `Geometric Mean Ratio` = c(
-              sprintf("%.6f", exp(results$test_mean) / exp(results$ref_mean)),
+              sprintf("%.6f", results$test_geomean / results$ref_geomean),
               ifelse(results$bioequivalent_ref, "PASS", "FAIL"),
               ifelse(results$bioequivalent_const, "PASS", "FAIL")
             ),
@@ -1164,17 +1170,17 @@ server <- function(input, output, session) {
           "Constant-scaled Procedure"
         ),
         `Geometric Mean Test` = c(
-          sprintf("%.6f", exp(results$test_mean)),
+          sprintf("%.6f", results$test_geomean),
           sprintf("%.9f", results$eq_ref),
           sprintf("%.9f", results$eq_const)
         ),
         `Geometric Mean Reference` = c(
-          sprintf("%.6f", exp(results$ref_mean)),
+          sprintf("%.6f", results$ref_geomean),
           sprintf("%.9f", results$hq_ref),
           sprintf("%.9f", results$hq_const)
         ),
         `Geometric Mean Ratio` = c(
-          sprintf("%.6f", exp(results$test_mean) / exp(results$ref_mean)),
+          sprintf("%.6f", results$test_geomean / results$ref_geomean),
           ifelse(results$bioequivalent_ref, "<strong>PASS</strong>", "<strong>FAIL</strong>"),
           ifelse(results$bioequivalent_const, "<strong>PASS</strong>", "<strong>FAIL</strong>")
         ),
