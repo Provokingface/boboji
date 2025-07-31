@@ -903,13 +903,13 @@ server <- function(input, output, session) {
               sprintf("%.6f", results$test_geomean / results$ref_geomean)
             ),
             `Sample SD σ_T` = c(
-              sprintf("%.6f", results$sd_raw_t)
+              sprintf("%.6f", results$sd_log_t)
             ),
             `Sample SD σ_R` = c(
-              sprintf("%.6f", results$sd_raw_r)
+              sprintf("%.6f", results$sd_log_r)
             ),
             `Sample SD Ratio (σ_T/σ_R)` = c(
-              sprintf("%.6f", results$sd_raw_t / results$sd_raw_r)
+              sprintf("%.6f", results$sd_log_t / results$sd_log_r)
             ),
             check.names = FALSE
           )
@@ -1292,13 +1292,13 @@ server <- function(input, output, session) {
           sprintf("%.6f", results$test_geomean / results$ref_geomean)
         ),
         `Sample SD σ_T` = c(
-          sprintf("%.6f", results$sd_raw_t)
+          sprintf("%.6f", results$sd_log_t)
         ),
         `Sample SD σ_R` = c(
-          sprintf("%.6f", results$sd_raw_r)
+          sprintf("%.6f", results$sd_log_r)
         ),
         `Sample SD Ratio (σ_T/σ_R)` = c(
-          sprintf("%.6f", results$sd_raw_t / results$sd_raw_r)
+          sprintf("%.6f", results$sd_log_t / results$sd_log_r)
         ),
         check.names = FALSE
       )
